@@ -1,0 +1,7 @@
+trades.db
+venv/
+.DS_Store
+.claude/
+__pycache__/
+*.pyc
+frontend/node_modules/
