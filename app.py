@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 import sqlite3
 import os
 import urllib.request
@@ -6,7 +6,50 @@ import urllib.parse
 import json as _json
 import ssl
 import time as _time
+from datetime import datetime as _dt, timezone as _tz
 from concurrent.futures import ThreadPoolExecutor
+import anthropic as _anthropic
+import plaid
+from plaid.api import plaid_api
+from plaid.model.link_token_create_request import LinkTokenCreateRequest
+from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
+from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
+from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
+from plaid.model.investments_holdings_get_request import InvestmentsHoldingsGetRequest
+from plaid.model.products import Products
+from plaid.model.country_code import CountryCode
+
+_claude = _anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+
+_plaid_cfg = plaid.Configuration(
+    host=plaid.Environment.Production,
+    api_key={
+        'clientId': os.environ.get('PLAID_CLIENT_ID', ''),
+        'secret':   os.environ.get('PLAID_SECRET', ''),
+    }
+)
+_plaid = plaid_api.PlaidApi(plaid.ApiClient(_plaid_cfg))
+
+def _load_plaid_token():
+    conn = get_db()
+    row = conn.execute("SELECT value FROM kv WHERE key='plaid_access_token'").fetchone()
+    conn.close()
+    return row['value'] if row else None
+
+def _save_plaid_token(token):
+    conn = get_db()
+    conn.execute("INSERT OR REPLACE INTO kv (key, value) VALUES ('plaid_access_token', ?)", (token,))
+    conn.commit()
+    conn.close()
+
+_plaid_access_token = None
+
+def _init_plaid_token():
+    global _plaid_access_token
+    try:
+        _plaid_access_token = _load_plaid_token()
+    except Exception:
+        pass
 
 
 app = Flask(__name__, static_folder='static', static_url_path='')
@@ -28,6 +71,29 @@ def ensure_tables():
             open_date TEXT NOT NULL,
             shares    INTEGER NOT NULL,
             total_buy REAL NOT NULL
+        )
+    ''')
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS checkpoints (
+            id              INTEGER PRIMARY KEY,
+            symbol          TEXT NOT NULL,
+            name            TEXT NOT NULL DEFAULT '',
+            price           REAL NOT NULL,
+            checkpointed_at TEXT NOT NULL
+        )
+    ''')
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS contributions (
+            id     INTEGER PRIMARY KEY,
+            date   TEXT NOT NULL,
+            amount REAL NOT NULL,
+            note   TEXT NOT NULL DEFAULT ''
+        )
+    ''')
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS kv (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
         )
     ''')
     conn.commit()
@@ -197,6 +263,44 @@ def close_position(pos_id):
     return jsonify(dict(trade)), 201
 
 
+# ── Checkpoints ──────────────────────────────────────────────────────────────
+
+@app.get('/checkpoints')
+def get_checkpoints():
+    conn = get_db()
+    rows = conn.execute('SELECT * FROM checkpoints ORDER BY checkpointed_at DESC').fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.post('/checkpoints')
+def add_checkpoint():
+    data = request.get_json(silent=True) or {}
+    if not data.get('symbol') or data.get('price') is None:
+        return jsonify({'error': 'Missing symbol or price'}), 400
+    conn = get_db()
+    cur = conn.execute(
+        'INSERT INTO checkpoints (symbol, name, price, checkpointed_at) VALUES (?,?,?,?)',
+        (data['symbol'].upper(), data.get('name', ''), float(data['price']),
+         _dt.now(_tz.utc).isoformat())
+    )
+    conn.commit()
+    row = conn.execute('SELECT * FROM checkpoints WHERE id=?', (cur.lastrowid,)).fetchone()
+    conn.close()
+    return jsonify(dict(row)), 201
+
+
+@app.delete('/checkpoints/<int:cp_id>')
+def delete_checkpoint(cp_id):
+    conn = get_db()
+    cur = conn.execute('DELETE FROM checkpoints WHERE id=?', (cp_id,))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        return jsonify({'error': 'Not found'}), 404
+    return '', 204
+
+
 # ── Bulk market prices ───────────────────────────────────────────────────────
 
 _SSL = ssl.create_default_context()
@@ -349,6 +453,249 @@ def market_prices():
     return jsonify(merged)
 
 
+# ── Contributions ─────────────────────────────────────────────────────────────
+
+@app.get('/contributions')
+def get_contributions():
+    conn = get_db()
+    rows = conn.execute('SELECT * FROM contributions ORDER BY date ASC, id ASC').fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.post('/contributions')
+def add_contribution():
+    data = request.get_json(silent=True) or {}
+    if not data.get('date') or data.get('amount') is None:
+        return jsonify({'error': 'date and amount are required'}), 400
+    conn = get_db()
+    cur = conn.execute(
+        'INSERT INTO contributions (date, amount, note) VALUES (?,?,?)',
+        (data['date'], float(data['amount']), data.get('note', ''))
+    )
+    conn.commit()
+    row = conn.execute('SELECT * FROM contributions WHERE id=?', (cur.lastrowid,)).fetchone()
+    conn.close()
+    return jsonify(dict(row)), 201
+
+
+@app.delete('/contributions/<int:cid>')
+def delete_contribution(cid):
+    conn = get_db()
+    cur = conn.execute('DELETE FROM contributions WHERE id=?', (cid,))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        return jsonify({'error': 'Not found'}), 404
+    return '', 204
+
+
+# ── Raw daily spark data (used for S&P overlay) ───────────────────────────────
+
+@app.get('/market/sparkdata')
+def market_sparkdata():
+    sym    = request.args.get('symbol', 'SPY').upper()
+    range_ = request.args.get('range', '2y')
+    try:
+        url = (f'https://query1.finance.yahoo.com/v7/finance/spark?symbols={sym}'
+               f'&range={range_}&interval=1d')
+        req = urllib.request.Request(url, headers=_HEADERS)
+        with urllib.request.urlopen(req, timeout=15, context=_SSL) as r:
+            data = _json.loads(r.read())
+        items = data['spark'].get('result') or []
+        if not items:
+            return jsonify({})
+        resp       = (items[0].get('response') or [{}])[0]
+        timestamps = resp.get('timestamp') or []
+        closes_raw = (resp.get('indicators', {}).get('quote') or [{}])[0].get('close') or []
+        out = {}
+        for ts, c in zip(timestamps, closes_raw):
+            if c is not None:
+                out[_dt.fromtimestamp(ts, tz=_tz.utc).strftime('%Y-%m-%d')] = round(float(c), 2)
+        return jsonify(out)
+    except Exception:
+        return jsonify({}), 502
+
+
+# ── Plaid ─────────────────────────────────────────────────────────────────────
+
+@app.post('/plaid/link-token')
+def plaid_link_token():
+    global _plaid_access_token
+    try:
+        req = LinkTokenCreateRequest(
+            user=LinkTokenCreateRequestUser(client_user_id='local-user'),
+            client_name='Project Cirrus',
+            products=[Products('investments')],
+            country_codes=[CountryCode('US')],
+            language='en',
+        )
+        resp = _plaid.link_token_create(req)
+        return jsonify({'link_token': resp.to_dict()['link_token']})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.post('/plaid/exchange')
+def plaid_exchange():
+    global _plaid_access_token
+    public_token = (request.get_json(silent=True) or {}).get('public_token')
+    if not public_token:
+        return jsonify({'error': 'missing public_token'}), 400
+    try:
+        resp = _plaid.item_public_token_exchange(
+            ItemPublicTokenExchangeRequest(public_token=public_token)
+        )
+        _plaid_access_token = resp.to_dict()['access_token']
+        _save_plaid_token(_plaid_access_token)
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/plaid/balance')
+def plaid_balance():
+    if not _plaid_access_token:
+        return jsonify({'error': 'not connected'}), 400
+    try:
+        resp = _plaid.accounts_balance_get(
+            AccountsBalanceGetRequest(access_token=_plaid_access_token)
+        ).to_dict()
+        accounts = [
+            {
+                'name':     a['name'],
+                'type':     str(a['type']),
+                'subtype':  str(a['subtype']),
+                'balance':  a['balances']['current'],
+                'currency': a['balances'].get('iso_currency_code', 'USD'),
+            }
+            for a in resp['accounts']
+        ]
+        return jsonify(accounts)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/plaid/holdings')
+def plaid_holdings():
+    if not _plaid_access_token:
+        return jsonify({'error': 'not connected'}), 400
+    try:
+        resp = _plaid.investments_holdings_get(
+            InvestmentsHoldingsGetRequest(access_token=_plaid_access_token)
+        ).to_dict()
+        secs = {s['security_id']: s for s in resp['securities']}
+        holdings = [
+            {
+                'name':     secs.get(h['security_id'], {}).get('name', ''),
+                'ticker':   secs.get(h['security_id'], {}).get('ticker_symbol', ''),
+                'quantity': h['quantity'],
+                'value':    h['institution_value'] or (
+                    h['quantity'] * (secs.get(h['security_id'], {}).get('close_price') or 0)
+                ),
+                'cost':     h.get('cost_basis'),
+                'currency': h.get('iso_currency_code', 'USD'),
+            }
+            for h in resp['holdings']
+        ]
+        return jsonify(holdings)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.get('/plaid/status')
+def plaid_status():
+    return jsonify({'connected': _plaid_access_token is not None})
+
+
+@app.get('/plaid/debug')
+def plaid_debug():
+    if not _plaid_access_token:
+        return jsonify({'error': 'not connected'}), 400
+    try:
+        resp = _plaid.investments_holdings_get(
+            InvestmentsHoldingsGetRequest(access_token=_plaid_access_token)
+        ).to_dict()
+        return jsonify(resp)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Claude: explain stock movement ───────────────────────────────────────────
+
+def _fetch_news(symbol):
+    try:
+        url = (
+            'https://query1.finance.yahoo.com/v1/finance/search'
+            f'?q={urllib.parse.quote(symbol)}&quotesCount=0&newsCount=8&listsCount=0'
+        )
+        req = urllib.request.Request(url, headers=_HEADERS)
+        with urllib.request.urlopen(req, timeout=6, context=_SSL) as r:
+            data = _json.loads(r.read())
+        headlines = [
+            item.get('title', '')
+            for item in data.get('news', [])
+            if item.get('title')
+        ]
+        return headlines[:8]
+    except Exception:
+        return []
+
+
+@app.post('/api/explain')
+def explain_stock():
+    data       = request.get_json(silent=True) or {}
+    symbol     = data.get('symbol', '').upper()
+    name       = data.get('name', symbol)
+    price      = data.get('price')
+    change_pct = data.get('change_pct')
+    week_pct   = data.get('week_pct')
+    month_pct  = data.get('month_pct')
+    sixmo_pct  = data.get('sixmo_pct')
+    year_pct   = data.get('year_pct')
+
+    today    = _dt.now(_tz.utc).strftime('%B %d, %Y')
+    headlines = _fetch_news(symbol)
+    news_block = (
+        'Recent headlines:\n' + '\n'.join(f'- {h}' for h in headlines)
+        if headlines else 'No recent headlines available.'
+    )
+
+    def fmt(v): return f'{v:+.2f}%' if v is not None else 'N/A'
+
+    prompt = (
+        f'Today is {today}.\n\n'
+        f'{name} ({symbol}) — current price ${price}\n'
+        f'Performance: today {fmt(change_pct)} · 5-day {fmt(week_pct)} · '
+        f'1-month {fmt(month_pct)} · 6-month {fmt(sixmo_pct)} · 1-year {fmt(year_pct)}\n\n'
+        f'{news_block}\n\n'
+        f'Based on the price action and headlines above, give a concise explanation of:\n'
+        f'1. What is driving the stock\'s recent movement\n'
+        f'2. Key fundamental or macro factors investors are watching\n'
+        f'3. Context from the headlines above\n\n'
+        f'Be specific. Keep it under 200 words. No disclaimers.'
+    )
+
+    def generate():
+        try:
+            with _claude.messages.stream(
+                model='claude-sonnet-4-6',
+                max_tokens=400,
+                messages=[{'role': 'user', 'content': prompt}],
+            ) as stream:
+                for text in stream.text_stream:
+                    yield f'data: {_json.dumps({"text": text})}\n\n'
+        except Exception as e:
+            yield f'data: {_json.dumps({"text": f"Error: {e}"})}\n\n'
+        yield 'data: [DONE]\n\n'
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+    )
+
+
 # ── Symbol search (Yahoo Finance) ────────────────────────────────────────────
 
 @app.get('/search')
@@ -394,4 +741,5 @@ def get_quote(symbol):
 
 if __name__ == '__main__':
     ensure_tables()
+    _init_plaid_token()
     app.run(debug=True, port=8080)

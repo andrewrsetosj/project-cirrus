@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import Markdown from 'react-markdown'
 
 // ── Stock name lookup ─────────────────────────────────────────────────────────
 const N = {
@@ -359,7 +360,81 @@ const REFRESH  = 60
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function IndustryCard({ industry, prices, history, loading, histLoading }) {
+// ── Explain side panel ────────────────────────────────────────────────────────
+
+function ExplainPanel({ sym, name, price, changePct, explanation, explaining, onClose }) {
+  const fmtP = v => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`
+  const open  = !!sym
+  return (
+    <>
+      {open && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 99 }}
+          onClick={onClose}
+        />
+      )}
+      <div style={{
+        position: 'fixed', top: 0, right: 0, bottom: 0, width: 380,
+        background: 'var(--bg-card)',
+        borderLeft: '1px solid var(--bdr-mid)',
+        transform: open ? 'translateX(0)' : 'translateX(100%)',
+        transition: 'transform 0.22s cubic-bezier(.4,0,.2,1)',
+        zIndex: 100,
+        display: 'flex', flexDirection: 'column',
+        boxShadow: open ? '-8px 0 32px rgba(0,0,0,0.5)' : 'none',
+      }}>
+        {/* Header */}
+        <div style={{ padding: '16px 18px 12px', borderBottom: '1px solid var(--bdr)', display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 16, fontWeight: 700, color: 'var(--cyan)' }}>{sym}</span>
+              {price != null && (
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--t1)' }}>
+                  ${price.toFixed(2)}
+                </span>
+              )}
+              {changePct != null && (
+                <span style={{ fontSize: 11, color: changePct >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                  {fmtP(changePct)}
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--t3)', marginTop: 2 }}>{name}</div>
+          </div>
+          <button onClick={onClose} style={{
+            background: 'none', border: 'none', color: 'var(--t3)', fontSize: 16,
+            cursor: 'pointer', padding: '2px 6px', lineHeight: 1,
+          }}>✕</button>
+        </div>
+
+        {/* Body */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '14px 18px', fontSize: 12, lineHeight: 1.7, color: 'var(--t2)' }}>
+          {explaining && !explanation && (
+            <span style={{ color: 'var(--t3)', fontStyle: 'italic' }}>Asking Claude…</span>
+          )}
+          {explanation && (
+            <Markdown components={{
+              h2: ({ children }) => <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--t1)', marginTop: 14, marginBottom: 4 }}>{children}</div>,
+              h3: ({ children }) => <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--t1)', marginTop: 10, marginBottom: 2 }}>{children}</div>,
+              p:  ({ children }) => <p style={{ marginBottom: 10 }}>{children}</p>,
+              strong: ({ children }) => <strong style={{ color: 'var(--t1)', fontWeight: 600 }}>{children}</strong>,
+              ul: ({ children }) => <ul style={{ paddingLeft: 16, marginBottom: 10 }}>{children}</ul>,
+              li: ({ children }) => <li style={{ marginBottom: 3 }}>{children}</li>,
+            }}>
+              {explanation + (explaining ? ' ▍' : '')}
+            </Markdown>
+          )}
+        </div>
+
+        <div style={{ padding: '10px 18px', borderTop: '1px solid var(--bdr)', fontSize: 10, color: 'var(--t3)' }}>
+          Powered by Claude · For informational purposes only
+        </div>
+      </div>
+    </>
+  )
+}
+
+function IndustryCard({ industry, prices, history, loading, histLoading, checkpointedSymbols, onCheckpoint, activeSym, onAskWhy }) {
   const rows  = industry.stocks.map(sym => ({ sym, p: prices[sym], h: history[sym] }))
   const valid = rows.filter(r => r.p?.change_pct != null)
   const avg   = valid.length ? valid.reduce((s, r) => s + r.p.change_pct, 0) / valid.length : null
@@ -387,7 +462,7 @@ function IndustryCard({ industry, prices, history, loading, histLoading }) {
           <thead>
             <tr>
               <th>Ticker</th><th>Company</th><th className="r">Price</th>
-              <th className="r">Day</th><th className="r">5D</th><th className="r">1M</th><th className="r">6M</th><th className="r">1Y</th>
+              <th className="r">Day</th><th className="r">5D</th><th className="r">1M</th><th className="r">6M</th><th className="r">1Y</th><th /><th />
             </tr>
           </thead>
           <tbody>
@@ -405,6 +480,24 @@ function IndustryCard({ industry, prices, history, loading, histLoading }) {
                   <td className={`r num-cell ${pctCls(h?.month_pct)}`}>{fmtPct(h?.month_pct, histLoading)}</td>
                   <td className={`r num-cell ${pctCls(h?.sixmo_pct)}`}>{fmtPct(h?.sixmo_pct, histLoading)}</td>
                   <td className={`r num-cell ${pctCls(h?.year_pct)}`}>{fmtPct(h?.year_pct,   histLoading)}</td>
+                  <td className="cp-cell">
+                    {checkpointedSymbols?.has(sym) && <span className="cp-dot" />}
+                    <button
+                      className="cp-btn"
+                      onClick={() => p?.price != null && onCheckpoint(sym, p.price, N[sym] || sym)}
+                      disabled={p?.price == null}
+                      title={`Checkpoint ${sym}`}
+                    >⊕</button>
+                  </td>
+                  <td className="cp-cell">
+                    <button
+                      className="cp-btn"
+                      style={{ color: activeSym === sym ? 'var(--cyan)' : undefined, opacity: p?.price == null ? 0.35 : 1 }}
+                      onClick={() => onAskWhy(sym, p, h)}
+                      disabled={p?.price == null}
+                      title={`Why is ${sym} moving?`}
+                    >?</button>
+                  </td>
                 </tr>
               )
             })}
@@ -419,7 +512,7 @@ function IndustryCard({ industry, prices, history, loading, histLoading }) {
 
 const HIST_REFRESH = 300 // re-fetch history every 5 minutes
 
-export default function Research() {
+export default function Research({ checkpoints = [], onCheckpoint }) {
   const [prices,      setPrices]      = useState({})
   const [history,     setHistory]     = useState({})
   const [loading,     setLoading]     = useState(true)
@@ -428,6 +521,50 @@ export default function Research() {
   const [countdown,   setCountdown]   = useState(REFRESH)
   const fetchingRef     = useRef(false)
   const histFetchingRef = useRef(false)
+
+  const [activeSym,   setActiveSym]   = useState(null)
+  const [activeData,  setActiveData]  = useState({})
+  const [explanation, setExplanation] = useState('')
+  const [explaining,  setExplaining]  = useState(false)
+
+  const askWhy = async (sym, p, h) => {
+    if (activeSym === sym) { setActiveSym(null); return }
+    setActiveSym(sym)
+    setActiveData({ price: p?.price, changePct: p?.change_pct, name: N[sym] || sym })
+    setExplanation('')
+    setExplaining(true)
+    try {
+      const res = await fetch('/api/explain', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: sym, name: N[sym] || sym,
+          price: p?.price, change_pct: p?.change_pct,
+          week_pct: h?.week_pct, month_pct: h?.month_pct,
+          sixmo_pct: h?.sixmo_pct, year_pct: h?.year_pct,
+        }),
+      })
+      const reader  = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop()
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const payload = line.slice(6)
+          if (payload === '[DONE]') { setExplaining(false); return }
+          try { setExplanation(prev => prev + JSON.parse(payload).text) } catch {}
+        }
+      }
+    } catch {
+      setExplanation('Failed to load explanation.')
+    }
+    setExplaining(false)
+  }
 
   const fetchAll = async () => {
     if (fetchingRef.current) return
@@ -474,6 +611,16 @@ export default function Research() {
 
   return (
     <div>
+      <ExplainPanel
+        sym={activeSym}
+        name={activeData.name}
+        price={activeData.price}
+        changePct={activeData.changePct}
+        explanation={explanation}
+        explaining={explaining}
+        onClose={() => setActiveSym(null)}
+      />
+
       <div className="trades-panel-header">
         <div className="trades-title">
           Industry Research
@@ -494,7 +641,11 @@ export default function Research() {
       <div className="research-grid">
         {INDUSTRIES.map(ind => (
           <IndustryCard key={ind.id} industry={ind} prices={prices} history={history}
-            loading={loading} histLoading={histLoading} />
+            loading={loading} histLoading={histLoading}
+            checkpointedSymbols={new Set(checkpoints.map(c => c.symbol))}
+            onCheckpoint={onCheckpoint}
+            activeSym={activeSym}
+            onAskWhy={askWhy} />
         ))}
       </div>
     </div>

@@ -69,7 +69,20 @@ const axisTitle = text => ({
 })
 
 // ── Equity Curve ─────────────────────────────────────────────────────────────
-export function EquityCurve({ trades }) {
+const SPY_COLOR = '#f5a623'
+
+function findSpyPrice(spyData, dateStr) {
+  if (spyData[dateStr] != null) return spyData[dateStr]
+  const d = new Date(dateStr + 'T12:00:00Z')
+  for (let i = 1; i <= 5; i++) {
+    d.setUTCDate(d.getUTCDate() - 1)
+    const s = d.toISOString().slice(0, 10)
+    if (spyData[s] != null) return spyData[s]
+  }
+  return null
+}
+
+export function EquityCurve({ trades, spyData = {}, contributions = [] }) {
   const sorted = [...trades].sort((a, b) =>
     a.close_date < b.close_date ? -1 : a.close_date > b.close_date ? 1 : a.id - b.id
   )
@@ -78,6 +91,47 @@ export function EquityCurve({ trades }) {
   const labels = sorted.map(t => `${t.symbol} · ${t.close_date}`)
 
   const color = data[data.length - 1] >= 0 ? CYAN : LOSS_B
+
+  // S&P overlay: simulate buying SPY on each contribution date, track P&L vs contributions made so far
+  const hasSpy = Object.keys(spyData).length > 0 && sorted.length > 0 && contributions.length > 0
+  let spyLine = null
+  if (hasSpy) {
+    // pre-compute SPY shares bought per contribution
+    const spyTranches = contributions
+      .filter(c => c.amount > 0)
+      .map(c => {
+        const price = findSpyPrice(spyData, c.date)
+        return price ? { date: c.date, shares: c.amount / price, cost: c.amount } : null
+      })
+      .filter(Boolean)
+
+    if (spyTranches.length > 0) {
+      spyLine = sorted.map(t => {
+        const spyNow = findSpyPrice(spyData, t.close_date)
+        if (!spyNow) return null
+        // only include tranches invested on or before this trade's close date
+        const active = spyTranches.filter(tr => tr.date <= t.close_date)
+        if (!active.length) return null
+        const spyValue = r2(active.reduce((s, tr) => s + tr.shares * spyNow, 0))
+        const costSoFar = r2(active.reduce((s, tr) => s + tr.cost, 0))
+        return r2(spyValue - costSoFar)
+      })
+    }
+  }
+
+  const spyDataset = spyLine ? [{
+    label: 'S&P 500 (SPY)',
+    data: spyLine,
+    borderColor: SPY_COLOR,
+    borderWidth: 1.5,
+    borderDash: [4, 3],
+    pointRadius: 0,
+    pointHoverRadius: 4,
+    pointBackgroundColor: SPY_COLOR,
+    fill: false,
+    tension: 0.35,
+    spanGaps: true,
+  }] : []
 
   return (
     <div style={{ height: 220 }}>
@@ -119,6 +173,7 @@ export function EquityCurve({ trades }) {
               fill: false,
               tension: 0,
             },
+            ...spyDataset,
           ]
         }}
         options={{
@@ -131,12 +186,12 @@ export function EquityCurve({ trades }) {
               position: 'top',
               align: 'end',
               labels: {
-                filter: item => item.text === 'Break Even',
+                filter: item => item.text === 'Break Even' || item.text === 'S&P 500 (SPY)',
                 color: 'rgba(255,255,255,0.35)',
                 font: { family: 'Inter', size: 10 },
                 boxWidth: 18,
                 boxHeight: 1,
-                padding: 0,
+                padding: 8,
               },
             },
             tooltip: {
@@ -144,7 +199,10 @@ export function EquityCurve({ trades }) {
               filter: item => item.dataset.label !== 'Break Even',
               callbacks: {
                 title: ctx => ctx[0].label,
-                label: ctx => fmtTip(ctx.parsed.y),
+                label: ctx => {
+                  const label = ctx.dataset.label === 'S&P 500 (SPY)' ? '  SPY equiv' : '  Your P&L'
+                  return `${label}: ${fmtTip(ctx.parsed.y).trim()}`
+                },
               }
             }
           },

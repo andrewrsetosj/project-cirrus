@@ -1,5 +1,29 @@
 export const r2 = n => Math.round(n * 100) / 100
 
+export function xirr(cashflows) {
+  // cashflows: [{date: 'YYYY-MM-DD', amount: number}, ...]
+  // contributions = negative amounts (money going in), current value = positive
+  if (!cashflows || cashflows.length < 2) return null
+  const ms = cashflows.map(cf => new Date(cf.date + 'T12:00:00Z').getTime())
+  const amounts = cashflows.map(cf => cf.amount)
+  const t0 = Math.min(...ms)
+  const years = ms.map(d => (d - t0) / (365.25 * 24 * 3600 * 1000))
+
+  const npv  = r => amounts.reduce((s, a, i) => s + a / Math.pow(1 + r, years[i]), 0)
+  const dnpv = r => amounts.reduce((s, a, i) => s - years[i] * a / Math.pow(1 + r, years[i] + 1), 0)
+
+  let r = 0.1
+  for (let i = 0; i < 300; i++) {
+    const f = npv(r), df = dnpv(r)
+    if (Math.abs(df) < 1e-12) break
+    const rNew = r - f / df
+    if (rNew <= -1) return null
+    if (Math.abs(rNew - r) < 1e-9) { r = rNew; break }
+    r = rNew
+  }
+  return isFinite(r) ? r : null
+}
+
 export function tradeCategory(days) {
   if (days <= 1)   return 'Day'
   if (days <= 30)  return 'Swing'

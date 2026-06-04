@@ -12,7 +12,9 @@
     "chart.js": "^4.4.0",
     "react": "^18.3.0",
     "react-chartjs-2": "^5.2.0",
-    "react-dom": "^18.3.0"
+    "react-dom": "^18.3.0",
+    "react-markdown": "^10.1.0",
+    "react-plaid-link": "^4.1.1"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.0",

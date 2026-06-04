@@ -1,4 +1,4 @@
-import { r2, tradeCategory } from '../utils/compute'
+import { r2, tradeCategory, xirr } from '../utils/compute'
 import { fmtDollar, fmtPct, fmtNum } from '../utils/format'
 import MetricCard from './MetricCard'
 import { EquityCurve, SymbolPL, MonthlyPL, WinLossChart, HoldScatter } from './Charts'
@@ -219,7 +219,7 @@ function TopTradesTable({ trades, variant }) {
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
-export default function Dashboard({ trades }) {
+export default function Dashboard({ trades, spyData = {}, contributions = [], positions = [], prices = {} }) {
   if (!trades.length) return null
 
   const winners = trades.filter(t => t.net > 0)
@@ -238,6 +238,18 @@ export default function Dashboard({ trades }) {
   const totalCapital = r2(trades.reduce((s, t) => s + t.total_buy, 0))
   const returnOnCap  = totalCapital > 0 ? totalPL / totalCapital : 0
 
+  // XIRR — contributions as negative CFs, current portfolio value as final positive CF
+  const netContributions = r2(contributions.reduce((s, c) => s + c.amount, 0))
+  const unrealizedPL = r2(positions.reduce((s, p) => {
+    const price = prices[p.symbol]
+    return price != null ? s + (price * p.shares - p.total_buy) : s
+  }, 0))
+  const portfolioValue = r2(netContributions + totalPL + unrealizedPL)
+  const xirrRate = contributions.length >= 1 ? xirr([
+    ...contributions.map(c => ({ date: c.date, amount: -c.amount })),
+    { date: new Date().toISOString().slice(0, 10), amount: portfolioValue },
+  ]) : null
+
   return (
     <div className="dashboard">
 
@@ -249,15 +261,15 @@ export default function Dashboard({ trades }) {
         <MetricCard label="Avg Hold"          value={`${avgHoldDays}d`}                    secondary="average days per trade" />
         <MetricCard label="Avg Winner"        value={avgWinner != null ? fmtDollar(avgWinner) : '—'} variant="gain" secondary={bestWin  != null ? <>best: <span className="hl">{fmtDollar(bestWin)}</span></>  : null} />
         <MetricCard label="Avg Loser"         value={avgLoser  != null ? fmtDollar(avgLoser)  : '—'} variant="loss" secondary={worstLoss != null ? <>worst: <span className="hl">{fmtDollar(worstLoss)}</span></> : null} />
-        <MetricCard label="Capital Deployed"  value={fmtDollar(totalCapital)}              secondary="total amount invested" />
-        <MetricCard label="Return on Capital" value={fmtPct(returnOnCap, 2)}              variant={returnOnCap >= 0 ? 'gain' : 'loss'} secondary="net P&L / total deployed" />
+        <MetricCard label="Net Contributed"   value={fmtDollar(netContributions)}          secondary={<>portfolio value: <span className="hl">{fmtDollar(portfolioValue)}</span></>} />
+        <MetricCard label="XIRR"              value={xirrRate != null ? fmtPct(xirrRate, 2) : '—'} variant={xirrRate != null && xirrRate >= 0 ? 'gain' : 'loss'} secondary="annualized return on contributions" />
       </div>
 
       {/* ── Equity Curve ── */}
       <div className="dash-section">
         <SectionLabel>Equity Curve — Cumulative P&amp;L</SectionLabel>
         <div className="chart-full">
-          <EquityCurve trades={trades} />
+          <EquityCurve trades={trades} spyData={spyData} contributions={contributions} />
         </div>
       </div>
 

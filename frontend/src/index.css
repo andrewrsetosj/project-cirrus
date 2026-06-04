@@ -746,6 +746,52 @@ tbody tr:hover td:first-child {
 @media (min-width: 1800px) { .research-grid { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 800px)  { .research-grid { grid-template-columns: 1fr; } }
 
+/* ── Checkpoint button (research table) ──────────────────────────────────── */
+.cp-cell {
+  width: 28px;
+  white-space: nowrap;
+  text-align: center;
+  padding: 0 4px !important;
+}
+
+.cp-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--cyan);
+  box-shadow: 0 0 4px var(--cyan);
+  vertical-align: middle;
+  margin-right: 2px;
+}
+
+.cp-btn {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--t3);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 4px;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.res-table tbody tr:hover .cp-btn {
+  opacity: 1;
+}
+
+.cp-btn:hover {
+  color: var(--cyan);
+  border-color: var(--bdr-cyan);
+}
+
+.cp-btn:disabled {
+  opacity: 0.2;
+  cursor: default;
+}
+
 /* ── Symbol autocomplete dropdown ───────────────────────────────────────── */
 .sym-dropdown {
   background: #111928;

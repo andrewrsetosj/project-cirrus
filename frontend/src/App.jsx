@@ -5,14 +5,19 @@ import TabBar from './components/TabBar'
 import Dashboard from './components/Dashboard'
 import Trades from './components/Trades'
 import Positions from './components/Positions'
+import Contributions from './components/Contributions'
+import FidelityPositions from './components/FidelityPositions'
 import Research from './components/Research'
+import CheckpointTab from './components/Checkpoint'
 
 export default function App() {
   const [trades,        setTrades]        = useState([])
   const [positions,     setPositions]     = useState([])
   const [prices,        setPrices]        = useState({})
   const [pricesLoading, setPricesLoading] = useState(false)
-  const validTabs = ['dashboard', 'trades', 'positions', 'research']
+  const [spyData,        setSpyData]        = useState({})
+  const [contributions,  setContributions]  = useState([])
+  const validTabs = ['dashboard', 'trades', 'positions', 'contributions', 'research', 'checkpoint']
   const [tab, setTab] = useState(() => {
     const hash = window.location.hash.slice(1)
     return validTabs.includes(hash) ? hash : 'dashboard'
@@ -111,9 +116,53 @@ export default function App() {
     return (await res.json()).error || 'Failed to close position.'
   }
 
+  // ── Checkpoints ────────────────────────────────────────────────────────────
+
+  const [checkpoints, setCheckpoints] = useState([])
+
+  const fetchCheckpoints = useCallback(async () => {
+    const res = await fetch('/checkpoints')
+    setCheckpoints(await res.json())
+  }, [])
+
+  const addCheckpoint = async (symbol, price, name = '') => {
+    await fetch('/checkpoints', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol, price, name }),
+    })
+    fetchCheckpoints()
+  }
+
+  const deleteCheckpoint = async (id) => {
+    await fetch(`/checkpoints/${id}`, { method: 'DELETE' })
+    fetchCheckpoints()
+  }
+
   // ── Init ───────────────────────────────────────────────────────────────────
 
-  useEffect(() => { fetchTrades(); fetchPositions() }, [fetchTrades, fetchPositions])
+  const fetchContributions = useCallback(async () => {
+    const res = await fetch('/contributions')
+    setContributions(await res.json())
+  }, [])
+
+  const addContribution = async (data) => {
+    const res = await fetch('/contributions', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+    })
+    if (res.ok) { await fetchContributions(); return null }
+    return (await res.json()).error || 'Failed to add contribution.'
+  }
+
+  const deleteContribution = async (id) => {
+    await fetch(`/contributions/${id}`, { method: 'DELETE' })
+    fetchContributions()
+  }
+
+  useEffect(() => {
+    fetchTrades(); fetchPositions(); fetchCheckpoints(); fetchContributions()
+    fetch('/market/sparkdata?symbol=SPY&range=2y')
+      .then(r => r.json()).then(d => setSpyData(d)).catch(() => {})
+  }, [fetchTrades, fetchPositions, fetchCheckpoints, fetchContributions])
 
   // Initial price load when positions arrive
   useEffect(() => { if (positions.length) fetchPrices(positions) }, [positions, fetchPrices])
@@ -128,18 +177,25 @@ export default function App() {
   return (
     <div className="app">
       <Header />
-      <TabBar tab={tab} onTab={handleSetTab} positionCount={positions.length} />
+      <TabBar tab={tab} onTab={handleSetTab} positionCount={positions.length} checkpointCount={checkpoints.length} />
       <main className="main">
-        {tab === 'dashboard' && <Dashboard trades={trades} />}
+        {tab === 'dashboard' && <Dashboard trades={trades} spyData={spyData} contributions={contributions} positions={positions} prices={prices} />}
         {tab === 'trades'    && <Trades trades={trades} onAdd={addTrade} onDelete={deleteTrade} onUpdate={updateTrade} />}
         {tab === 'positions' && (
+          <>
+          <FidelityPositions />
           <Positions
             positions={positions} prices={prices} pricesLoading={pricesLoading}
             onRefreshPrices={refreshPrices} onAdd={addPosition} onUpdate={updatePosition}
             onDelete={deletePosition} onClose={closePosition}
           />
+          </>
         )}
-        {tab === 'research'  && <Research />}
+        {tab === 'contributions' && <Contributions contributions={contributions} onAdd={addContribution} onDelete={deleteContribution} />}
+        <div style={{ display: tab === 'research' ? 'block' : 'none' }}>
+          <Research checkpoints={checkpoints} onCheckpoint={addCheckpoint} />
+        </div>
+        {tab === 'checkpoint' && <CheckpointTab checkpoints={checkpoints} onDelete={deleteCheckpoint} />}
       </main>
     </div>
   )
