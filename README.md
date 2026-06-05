@@ -1,4 +1,4 @@
-# Project Cirrus
+# Project Cirrus - Stock dashboard
 
 A personal stock trade tracking dashboard built with Flask and React. Track open positions and closed trades, log P&L, and view live market prices and historical performance.
 
