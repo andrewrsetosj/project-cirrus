@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import SymbolInput from './SymbolInput'
+import DatePicker from './DatePicker'
 import { r2 } from '../utils/compute'
 import { fmtDollar, fmtPct } from '../utils/format'
 
@@ -28,7 +29,7 @@ function enrichPosition(p, prices) {
 // ── Add Position Form ─────────────────────────────────────────────────────────
 
 function AddPositionForm({ open, onAdd, onClose }) {
-  const [form, setForm] = useState({ symbol: '', open_date: '', shares: '', total_buy: '' })
+  const [form, setForm] = useState({ symbol: '', open_date: todayStr(), shares: '', total_buy: '' })
   const [error, setError] = useState('')
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
@@ -37,7 +38,7 @@ function AddPositionForm({ open, onAdd, onClose }) {
     setError('')
     const err = await onAdd(form)
     if (err) { setError(err); return }
-    setForm({ symbol: '', open_date: '', shares: '', total_buy: '' })
+    setForm({ symbol: '', open_date: todayStr(), shares: '', total_buy: '' })
     onClose()
   }
 
@@ -50,7 +51,7 @@ function AddPositionForm({ open, onAdd, onClose }) {
         </div>
         <div className="form-group">
           <label className="form-label">Open Date</label>
-          <input className="form-input" type="date" value={form.open_date} onChange={e => set('open_date', e.target.value)} required />
+          <DatePicker value={form.open_date} onChange={v => set('open_date', v)} required />
         </div>
         <div className="form-group">
           <label className="form-label">Shares</label>
@@ -108,6 +109,10 @@ function EditPositionRow({ position, colSpan, onSave, onCancel }) {
                 <div style={{ width: f.width }}>
                   <SymbolInput value={form.symbol} onChange={v => set('symbol', v)} required />
                 </div>
+              ) : f.key === 'open_date' ? (
+                <div style={{ width: f.width }}>
+                  <DatePicker value={form.open_date} onChange={v => set('open_date', v)} required />
+                </div>
               ) : (
                 <input
                   type={f.type}
@@ -151,7 +156,7 @@ function CloseFormRow({ position, colSpan, onClose, onCancel }) {
           <span className="close-form-sym">Close <strong>{position.symbol}</strong></span>
           <div className="close-form-field">
             <label>Close Date</label>
-            <input type="date" className="form-input" value={closeDate} onChange={e => setCloseDate(e.target.value)} required />
+            <DatePicker value={closeDate} onChange={setCloseDate} required />
           </div>
           <div className="close-form-field">
             <label>Total Sell $</label>

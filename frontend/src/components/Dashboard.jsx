@@ -1,3 +1,4 @@
+import React, { useState } from 'react'
 import { r2, tradeCategory, xirr } from '../utils/compute'
 import { fmtDollar, fmtPct, fmtNum } from '../utils/format'
 import MetricCard from './MetricCard'
@@ -13,15 +14,18 @@ function SectionLabel({ children }) {
 // ── Symbol performance table ─────────────────────────────────────────────────
 
 function SymbolTable({ trades }) {
+  const [expanded, setExpanded] = useState(new Set())
+
   const map = {}
   trades.forEach(t => {
-    if (!map[t.symbol]) map[t.symbol] = { trades: 0, wins: 0, totalPL: 0, totalDays: 0, cagrSum: 0, cagrCount: 0 }
+    if (!map[t.symbol]) map[t.symbol] = { trades: 0, wins: 0, totalPL: 0, totalDays: 0, cagrSum: 0, cagrCount: 0, rows: [] }
     const s = map[t.symbol]
     s.trades++
     if (t.net > 0) s.wins++
     s.totalPL     = r2(s.totalPL + t.net)
     s.totalDays  += t.days_held
     if (t.cagr != null) { s.cagrSum += t.cagr; s.cagrCount++ }
+    s.rows.push(t)
   })
 
   const rows = Object.entries(map)
@@ -33,6 +37,7 @@ function SymbolTable({ trades }) {
       avgPL: r2(s.totalPL / s.trades),
       avgDays: Math.round(s.totalDays / s.trades),
       avgCagr: s.cagrCount ? s.cagrSum / s.cagrCount : null,
+      rows: s.rows.sort((a, b) => a.open_date.localeCompare(b.open_date)),
     }))
     .sort((a, b) => b.totalPL - a.totalPL)
 
@@ -52,15 +57,67 @@ function SymbolTable({ trades }) {
         </thead>
         <tbody>
           {rows.map(r => (
-            <tr key={r.sym}>
-              <td className="sym-cell">{r.sym}</td>
-              <td className="r num-cell">{r.trades}</td>
-              <td className="r num-cell">{fmtPct(r.winRate, 0)}</td>
-              <td className={`r num-cell ${r.totalPL >= 0 ? 'gain-cell' : 'loss-cell'}`}>{fmtDollar(r.totalPL)}</td>
-              <td className={`r num-cell ${r.avgPL   >= 0 ? 'gain-cell' : 'loss-cell'}`}>{fmtDollar(r.avgPL)}</td>
-              <td className="r num-cell muted-cell">{r.avgDays}</td>
-              <td className="r num-cell muted-cell">{r.avgCagr != null ? fmtPct(r.avgCagr, 1) : '—'}</td>
-            </tr>
+            <React.Fragment key={r.sym}>
+              <tr
+                onClick={() => setExpanded(prev => {
+                  const next = new Set(prev)
+                  next.has(r.sym) ? next.delete(r.sym) : next.add(r.sym)
+                  return next
+                })}
+                style={{ cursor: 'pointer' }}
+              >
+                <td className="sym-cell">
+                  <span style={{ marginRight: 7, color: 'var(--t3)', fontSize: 9 }}>
+                    {expanded.has(r.sym) ? '▼' : '▶'}
+                  </span>
+                  {r.sym}
+                </td>
+                <td className="r num-cell">{r.trades}</td>
+                <td className="r num-cell">{fmtPct(r.winRate, 0)}</td>
+                <td className={`r num-cell ${r.totalPL >= 0 ? 'gain-cell' : 'loss-cell'}`}>{fmtDollar(r.totalPL)}</td>
+                <td className={`r num-cell ${r.avgPL   >= 0 ? 'gain-cell' : 'loss-cell'}`}>{fmtDollar(r.avgPL)}</td>
+                <td className="r num-cell muted-cell">{r.avgDays}</td>
+                <td className="r num-cell muted-cell">{r.avgCagr != null ? fmtPct(r.avgCagr, 1) : '—'}</td>
+              </tr>
+              {expanded.has(r.sym) && (
+                <tr>
+                  <td colSpan={7} style={{ padding: 0, background: 'var(--bg)' }}>
+                    <div style={{ padding: '6px 0 10px 32px' }}>
+                      <table className="sym-table" style={{ opacity: 0.9 }}>
+                        <thead>
+                          <tr>
+                            <th>Open</th>
+                            <th>Close</th>
+                            <th className="r">Shares</th>
+                            <th className="r">Cost</th>
+                            <th className="r">Proceeds</th>
+                            <th className="r">Net P&amp;L</th>
+                            <th className="r">Perf %</th>
+                            <th className="r">Days</th>
+                            <th className="r">CAGR</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {r.rows.map(t => (
+                            <tr key={t.id}>
+                              <td className="num-cell muted-cell">{t.open_date}</td>
+                              <td className="num-cell muted-cell">{t.close_date}</td>
+                              <td className="r num-cell">{t.shares}</td>
+                              <td className="r num-cell muted-cell">{fmtDollar(t.total_buy)}</td>
+                              <td className="r num-cell muted-cell">{fmtDollar(t.total_sell)}</td>
+                              <td className={`r num-cell ${t.net >= 0 ? 'gain-cell' : 'loss-cell'}`}>{fmtDollar(t.net)}</td>
+                              <td className={`r num-cell ${t.performance >= 0 ? 'gain-cell' : 'loss-cell'}`}>{fmtPct(t.performance)}</td>
+                              <td className="r num-cell muted-cell">{t.days_held}</td>
+                              <td className="r num-cell muted-cell">{t.cagr != null ? fmtPct(t.cagr, 1) : '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </React.Fragment>
           ))}
         </tbody>
       </table>
@@ -258,10 +315,10 @@ export default function Dashboard({ trades, spyData = {}, contributions = [], po
         <MetricCard label="Total P&L"         value={fmtDollar(totalPL)}                  variant={totalPL >= 0 ? 'gain' : 'loss'} secondary={<><span className="hl">{trades.length}</span> closed trades</>} />
         <MetricCard label="Win Rate"          value={fmtPct(winRate, 1)}                   secondary={<><span className="hl">{winners.length}</span> of {trades.length} winners</>} />
         <MetricCard label="Profit Factor"     value={pf === Infinity ? '∞' : fmtNum(pf)}  secondary={<>{fmtDollar(totalWin)} won / {fmtDollar(Math.abs(totalLoss))} lost</>} />
-        <MetricCard label="Avg Hold"          value={`${avgHoldDays}d`}                    secondary="average days per trade" />
+        <MetricCard label="Return on Capital"  value={fmtPct(returnOnCap, 2)}              variant={returnOnCap >= 0 ? 'gain' : 'loss'} secondary={<>on <span className="hl">{fmtDollar(totalCapital)}</span> deployed</>} />
         <MetricCard label="Avg Winner"        value={avgWinner != null ? fmtDollar(avgWinner) : '—'} variant="gain" secondary={bestWin  != null ? <>best: <span className="hl">{fmtDollar(bestWin)}</span></>  : null} />
         <MetricCard label="Avg Loser"         value={avgLoser  != null ? fmtDollar(avgLoser)  : '—'} variant="loss" secondary={worstLoss != null ? <>worst: <span className="hl">{fmtDollar(worstLoss)}</span></> : null} />
-        <MetricCard label="Net Contributed"   value={fmtDollar(netContributions)}          secondary={<>portfolio value: <span className="hl">{fmtDollar(portfolioValue)}</span></>} />
+        <MetricCard label="Open P&L"          value={fmtDollar(unrealizedPL)}              variant={unrealizedPL >= 0 ? 'gain' : 'loss'} secondary="unrealized across positions" />
         <MetricCard label="XIRR"              value={xirrRate != null ? fmtPct(xirrRate, 2) : '—'} variant={xirrRate != null && xirrRate >= 0 ? 'gain' : 'loss'} secondary="annualized return on contributions" />
       </div>
 
@@ -277,22 +334,8 @@ export default function Dashboard({ trades, spyData = {}, contributions = [], po
       <div className="dash-section">
         <div className="chart-2col">
           <div className="chart-card">
-            <SectionLabel>Net P&amp;L by Symbol</SectionLabel>
-            <SymbolPL trades={trades} />
-          </div>
-          <div className="chart-card">
             <SectionLabel>Monthly P&amp;L</SectionLabel>
             <MonthlyPL trades={trades} />
-          </div>
-        </div>
-      </div>
-
-      {/* ── Charts row 2 ── */}
-      <div className="dash-section">
-        <div className="chart-2col">
-          <div className="chart-card">
-            <SectionLabel>Gains vs Losses by Symbol</SectionLabel>
-            <WinLossChart trades={trades} />
           </div>
           <div className="chart-card">
             <SectionLabel>Hold Duration vs Return</SectionLabel>

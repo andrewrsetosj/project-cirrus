@@ -932,6 +932,119 @@ tbody tr:hover td:first-child {
   width: 150px;
 }
 
+/* ── Date Picker ─────────────────────────────────────────────────────────── */
+.dp-trigger {
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.dp-caret {
+  color: var(--t3);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.dp-cal {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 999;
+  background: #111928;
+  border: 1px solid rgba(0,200,225,0.35);
+  border-radius: var(--r);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  padding: 10px;
+  min-width: 220px;
+}
+
+.dp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.dp-month-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t1);
+  letter-spacing: 0.03em;
+}
+
+.dp-nav {
+  background: none;
+  border: 1px solid var(--bdr-mid);
+  border-radius: 4px;
+  color: var(--t2);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 8px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.dp-nav:hover {
+  color: var(--cyan);
+  border-color: var(--bdr-cyan);
+}
+
+.dp-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.dp-dow {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--t3);
+  text-align: center;
+  padding: 3px 0 5px;
+}
+
+.dp-day {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--t1);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  padding: 5px 2px;
+  text-align: center;
+  transition: background 0.12s, color 0.12s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+}
+
+.dp-day:hover {
+  background: var(--cyan-lo);
+  border-color: var(--bdr-cyan);
+  color: var(--cyan);
+}
+
+.dp-today {
+  border-color: rgba(0,200,225,0.3);
+  color: var(--cyan);
+}
+
+.dp-sel {
+  background: var(--cyan) !important;
+  border-color: var(--cyan) !important;
+  color: #030913 !important;
+  font-weight: 700;
+}
+
 /* ── Empty state ─────────────────────────────────────────────────────────── */
 .empty-row td {
   text-align: center;
