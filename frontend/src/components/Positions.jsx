@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import SymbolInput from './SymbolInput'
 import DatePicker from './DatePicker'
 import { r2 } from '../utils/compute'
@@ -171,6 +171,74 @@ function CloseFormRow({ position, colSpan, onClose, onCancel }) {
   )
 }
 
+// ── Close All Positions inline form ──────────────────────────────────────────
+
+function CloseAllFormRow({ positions, colSpan, onClose, onDone, onCancel }) {
+  const [closeDate, setCloseDate] = useState(todayStr())
+  const [totalSell, setTotalSell] = useState('')
+  const [error, setError]         = useState('')
+  const [loading, setLoading]     = useState(false)
+
+  const totalShares = positions.reduce((s, p) => s + p.shares, 0)
+  const total       = parseFloat(totalSell) || 0
+
+  const splits = positions.map((p, i) => {
+    if (i === positions.length - 1) {
+      const allocated = positions.slice(0, -1).reduce((s, pp) => s + r2(total * (pp.shares / totalShares)), 0)
+      return { ...p, sellAmt: r2(total - allocated) }
+    }
+    return { ...p, sellAmt: r2(total * (p.shares / totalShares)) }
+  })
+
+  const handleSubmit = async e => {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+    for (const p of splits) {
+      const err = await onClose(p.id, { close_date: closeDate, total_sell: String(p.sellAmt) })
+      if (err) { setError(err); setLoading(false); return }
+    }
+    setLoading(false)
+    onDone()
+  }
+
+  return (
+    <tr className="close-form-row">
+      <td colSpan={colSpan}>
+        <form className="inline-close-form" onSubmit={handleSubmit}>
+          <span className="close-form-sym">Close All <strong>{positions[0].symbol}</strong></span>
+          <div className="close-form-field">
+            <label>Close Date</label>
+            <DatePicker value={closeDate} onChange={setCloseDate} required />
+          </div>
+          <div className="close-form-field">
+            <label>Total Proceeds $</label>
+            <input
+              type="number" step="0.01" min="0.01" className="form-input"
+              placeholder="0.00" value={totalSell}
+              onChange={e => setTotalSell(e.target.value)} required
+            />
+          </div>
+          {total > 0 && (
+            <div style={{ display: 'flex', gap: 14, fontSize: 11, color: 'var(--t2)', alignItems: 'center' }}>
+              {splits.map(p => (
+                <span key={p.id}>
+                  #{p.id} ({p.shares} sh): <span style={{ color: 'var(--t1)' }}>{fmtDollar(p.sellAmt)}</span>
+                </span>
+              ))}
+            </div>
+          )}
+          {error && <span className="form-error">{error}</span>}
+          <button type="submit" className="btn btn-primary" disabled={loading} style={{ padding: '6px 14px', fontSize: 11 }}>
+            {loading ? 'Closing…' : `Confirm Close All (${positions.length} lots)`}
+          </button>
+          <button type="button" className="btn btn-ghost" style={{ padding: '6px 12px', fontSize: 11 }} onClick={onCancel}>Cancel</button>
+        </form>
+      </td>
+    </tr>
+  )
+}
+
 // ── Summary cards ─────────────────────────────────────────────────────────────
 
 function SummaryBar({ positions }) {
@@ -213,12 +281,24 @@ function SummaryBar({ positions }) {
 const COLS = 13   // number of visible columns before the action column
 
 export default function Positions({ positions, prices, pricesLoading, onRefreshPrices, onAdd, onDelete, onClose, onUpdate }) {
-  const [formOpen,   setFormOpen]   = useState(false)
-  const [closingId,  setClosingId]  = useState(null)
-  const [editingId,  setEditingId]  = useState(null)
-  const [confirmDel, setConfirmDel] = useState(null)
+  const [formOpen,        setFormOpen]        = useState(false)
+  const [closingId,       setClosingId]       = useState(null)
+  const [editingId,       setEditingId]       = useState(null)
+  const [confirmDel,      setConfirmDel]      = useState(null)
+  const [closingAllSymbol, setClosingAllSymbol] = useState(null)
 
   const enriched = positions.map(p => enrichPosition(p, prices))
+
+  // Group enriched positions by symbol
+  const symbolGroups = {}
+  enriched.forEach(p => {
+    if (!symbolGroups[p.symbol]) symbolGroups[p.symbol] = []
+    symbolGroups[p.symbol].push(p)
+  })
+  const multiSymbols   = new Set(Object.keys(symbolGroups).filter(s => symbolGroups[s].length > 1))
+  const lastOfMultiGroup = new Set(
+    Object.values(symbolGroups).filter(g => g.length > 1).map(g => g[g.length - 1].id)
+  )
 
   const handleClose = async (id, data) => {
     const err = await onClose(id, data)
@@ -238,7 +318,7 @@ export default function Positions({ positions, prices, pricesLoading, onRefreshP
   }
 
   const handleEdit = id => {
-    setEditingId(id); setClosingId(null); setConfirmDel(null)
+    setEditingId(id); setClosingId(null); setConfirmDel(null); setClosingAllSymbol(null)
   }
 
   return (
@@ -295,10 +375,12 @@ export default function Positions({ positions, prices, pricesLoading, onRefreshP
               </tr>
             )}
             {enriched.map(p => {
-              const plCls = p.unr_pl == null ? '' : p.unr_pl >= 0 ? 'cell-gain' : 'cell-loss'
+              const plCls   = p.unr_pl == null ? '' : p.unr_pl >= 0 ? 'cell-gain' : 'cell-loss'
+              const dimmed  = editingId === p.id || closingId === p.id || closingAllSymbol === p.symbol
+              const isMulti = multiSymbols.has(p.symbol)
               return (
-                <>
-                  <tr key={p.id} style={{ opacity: (editingId === p.id || closingId === p.id) ? 0.4 : 1 }}>
+                <React.Fragment key={p.id}>
+                  <tr style={{ opacity: dimmed ? 0.4 : 1 }}>
                     <td className="cell-r">{p.id}</td>
                     <td className="cell-sym">{p.symbol}</td>
                     <td className="cell-date">{p.open_date}</td>
@@ -318,6 +400,8 @@ export default function Positions({ positions, prices, pricesLoading, onRefreshP
                         <button className="btn-del" onClick={() => setEditingId(null)}>Cancel</button>
                       ) : closingId === p.id ? (
                         <button className="btn-del" onClick={() => setClosingId(null)}>Cancel</button>
+                      ) : closingAllSymbol === p.symbol ? (
+                        <button className="btn-del" onClick={() => setClosingAllSymbol(null)}>Cancel</button>
                       ) : confirmDel === p.id ? (
                         <span style={{ display: 'inline-flex', gap: 4 }}>
                           <button className="btn-del btn-del-armed" onClick={() => handleDelete(p.id)}>CONFIRM</button>
@@ -327,9 +411,15 @@ export default function Positions({ positions, prices, pricesLoading, onRefreshP
                         <span style={{ display: 'inline-flex', gap: 5 }}>
                           <button className="btn-del btn-edit" onClick={() => handleEdit(p.id)}>Edit</button>
                           <button className="btn-del" style={{ color: '#00c8e1' }}
-                            onClick={() => { setClosingId(p.id); setEditingId(null); setConfirmDel(null) }}>
+                            onClick={() => { setClosingId(p.id); setEditingId(null); setConfirmDel(null); setClosingAllSymbol(null) }}>
                             Close
                           </button>
+                          {isMulti && (
+                            <button className="btn-del" style={{ color: '#00c8e1' }}
+                              onClick={() => { setClosingAllSymbol(p.symbol); setClosingId(null); setEditingId(null); setConfirmDel(null) }}>
+                              Close All
+                            </button>
+                          )}
                           <button className="btn-del" onClick={() => handleDelete(p.id)}>✕</button>
                         </span>
                       )}
@@ -337,7 +427,6 @@ export default function Positions({ positions, prices, pricesLoading, onRefreshP
                   </tr>
                   {editingId === p.id && (
                     <EditPositionRow
-                      key={`edit-${p.id}`}
                       position={p}
                       colSpan={COLS + 1}
                       onSave={handleSave}
@@ -346,14 +435,22 @@ export default function Positions({ positions, prices, pricesLoading, onRefreshP
                   )}
                   {closingId === p.id && (
                     <CloseFormRow
-                      key={`close-${p.id}`}
                       position={p}
                       colSpan={COLS + 1}
                       onClose={handleClose}
                       onCancel={() => setClosingId(null)}
                     />
                   )}
-                </>
+                  {lastOfMultiGroup.has(p.id) && closingAllSymbol === p.symbol && (
+                    <CloseAllFormRow
+                      positions={symbolGroups[p.symbol]}
+                      colSpan={COLS + 1}
+                      onClose={onClose}
+                      onDone={() => setClosingAllSymbol(null)}
+                      onCancel={() => setClosingAllSymbol(null)}
+                    />
+                  )}
+                </React.Fragment>
               )
             })}
           </tbody>
