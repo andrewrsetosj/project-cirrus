@@ -83,34 +83,36 @@ function SymbolTable({ trades }) {
               </tr>
               {expanded.has(r.sym) && (
                 <tr>
-                  <td colSpan={7} style={{ padding: 0, background: 'var(--bg)' }}>
-                    <div style={{ padding: '6px 0 10px 32px' }}>
-                      <table className="sym-table" style={{ opacity: 0.9 }}>
+                  <td colSpan={7} style={{ padding: 0 }}>
+                    <div style={{ background: 'var(--bg-alt, rgba(255,255,255,0.03))', borderBottom: '1px solid var(--bdr)', padding: '4px 0 8px 0' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
                         <thead>
-                          <tr>
-                            <th>Open</th>
-                            <th>Close</th>
-                            <th className="r">Shares</th>
-                            <th className="r">Cost</th>
-                            <th className="r">Proceeds</th>
-                            <th className="r">Net P&amp;L</th>
-                            <th className="r">Perf %</th>
-                            <th className="r">Days</th>
-                            <th className="r">CAGR</th>
+                          <tr style={{ borderBottom: '1px solid var(--bdr)' }}>
+                            <th style={{ width: 32 }} />
+                            <th style={{ textAlign: 'left',  padding: '4px 8px', color: 'var(--t3)', fontWeight: 500, letterSpacing: '0.06em' }}>Open</th>
+                            <th style={{ textAlign: 'left',  padding: '4px 8px', color: 'var(--t3)', fontWeight: 500, letterSpacing: '0.06em' }}>Close</th>
+                            <th style={{ textAlign: 'right', padding: '4px 8px', color: 'var(--t3)', fontWeight: 500, letterSpacing: '0.06em' }}>Shares</th>
+                            <th style={{ textAlign: 'right', padding: '4px 8px', color: 'var(--t3)', fontWeight: 500, letterSpacing: '0.06em' }}>Cost</th>
+                            <th style={{ textAlign: 'right', padding: '4px 8px', color: 'var(--t3)', fontWeight: 500, letterSpacing: '0.06em' }}>Proceeds</th>
+                            <th style={{ textAlign: 'right', padding: '4px 8px', color: 'var(--t3)', fontWeight: 500, letterSpacing: '0.06em' }}>Net P&amp;L</th>
+                            <th style={{ textAlign: 'right', padding: '4px 8px', color: 'var(--t3)', fontWeight: 500, letterSpacing: '0.06em' }}>Perf %</th>
+                            <th style={{ textAlign: 'right', padding: '4px 8px', color: 'var(--t3)', fontWeight: 500, letterSpacing: '0.06em' }}>Days</th>
+                            <th style={{ textAlign: 'right', padding: '4px 8px', color: 'var(--t3)', fontWeight: 500, letterSpacing: '0.06em' }}>CAGR</th>
                           </tr>
                         </thead>
                         <tbody>
                           {r.rows.map(t => (
-                            <tr key={t.id}>
-                              <td className="num-cell muted-cell">{t.open_date}</td>
-                              <td className="num-cell muted-cell">{t.close_date}</td>
-                              <td className="r num-cell">{t.shares}</td>
-                              <td className="r num-cell muted-cell">{fmtDollar(t.total_buy)}</td>
-                              <td className="r num-cell muted-cell">{fmtDollar(t.total_sell)}</td>
-                              <td className={`r num-cell ${t.net >= 0 ? 'gain-cell' : 'loss-cell'}`}>{fmtDollar(t.net)}</td>
-                              <td className={`r num-cell ${t.performance >= 0 ? 'gain-cell' : 'loss-cell'}`}>{fmtPct(t.performance)}</td>
-                              <td className="r num-cell muted-cell">{t.days_held}</td>
-                              <td className="r num-cell muted-cell">{t.cagr != null ? fmtPct(t.cagr, 1) : '—'}</td>
+                            <tr key={t.id} style={{ borderBottom: '1px solid var(--bdr-subtle, rgba(255,255,255,0.04))' }}>
+                              <td style={{ width: 32 }} />
+                              <td style={{ padding: '5px 8px', color: 'var(--t2)', fontFamily: 'var(--mono)' }}>{t.open_date}</td>
+                              <td style={{ padding: '5px 8px', color: 'var(--t2)', fontFamily: 'var(--mono)' }}>{t.close_date}</td>
+                              <td style={{ padding: '5px 8px', textAlign: 'right', fontFamily: 'var(--mono)' }}>{t.shares}</td>
+                              <td style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--t2)', fontFamily: 'var(--mono)' }}>{fmtDollar(t.total_buy)}</td>
+                              <td style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--t2)', fontFamily: 'var(--mono)' }}>{fmtDollar(t.total_sell)}</td>
+                              <td style={{ padding: '5px 8px', textAlign: 'right', fontFamily: 'var(--mono)', color: t.net >= 0 ? 'var(--green)' : 'var(--red)' }}>{fmtDollar(t.net)}</td>
+                              <td style={{ padding: '5px 8px', textAlign: 'right', fontFamily: 'var(--mono)', color: t.performance >= 0 ? 'var(--green)' : 'var(--red)' }}>{fmtPct(t.performance)}</td>
+                              <td style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--t2)', fontFamily: 'var(--mono)' }}>{t.days_held}</td>
+                              <td style={{ padding: '5px 8px', textAlign: 'right', color: 'var(--t2)', fontFamily: 'var(--mono)' }}>{t.cagr != null ? fmtPct(t.cagr, 1) : '—'}</td>
                             </tr>
                           ))}
                         </tbody>
