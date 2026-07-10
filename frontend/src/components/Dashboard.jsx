@@ -278,10 +278,22 @@ function TopTradesTable({ trades, variant }) {
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
-export default function Dashboard({ trades, spyData = {}, contributions = [], positions = [], prices = {} }) {
+export default function Dashboard({ trades, spyData = {}, contributions = [], positions = [], prices = {}, incomeLogs = [], onAddIncome }) {
   if (!trades.length) return null
 
   const [modal, setModal] = useState(null)
+  const [incomeForm, setIncomeForm] = useState({ date: new Date().toISOString().slice(0, 10), amount: '', note: '' })
+  const [incomeError, setIncomeError] = useState('')
+
+  const currentIncome = incomeLogs.length ? incomeLogs[incomeLogs.length - 1].amount : null
+
+  const handleAddIncome = async e => {
+    e.preventDefault()
+    setIncomeError('')
+    const err = await onAddIncome({ date: incomeForm.date, amount: parseFloat(incomeForm.amount), note: incomeForm.note })
+    if (err) { setIncomeError(err); return }
+    setIncomeForm({ date: new Date().toISOString().slice(0, 10), amount: '', note: '' })
+  }
 
   const winners = trades.filter(t => t.net > 0)
   const losers  = trades.filter(t => t.net < 0)
@@ -304,7 +316,7 @@ export default function Dashboard({ trades, spyData = {}, contributions = [], po
     const price = prices[p.symbol]
     return price != null ? s + (price * p.shares - p.total_buy) : s
   }, 0))
-  const portfolioValue = r2(netContributions + totalPL + unrealizedPL)
+  const portfolioValue = r2(netContributions + totalPL + unrealizedPL + (currentIncome ?? 0))
   const xirrRate = contributions.length >= 1 ? xirr([
     ...contributions.map(c => ({ date: c.date, amount: -c.amount })),
     { date: new Date().toISOString().slice(0, 10), amount: portfolioValue },
@@ -334,24 +346,22 @@ export default function Dashboard({ trades, spyData = {}, contributions = [], po
         </>
       ),
     },
-    'Win Rate': {
-      value: fmtPct(winRate, 1), variant: '',
+    'Account Value': {
+      value: fmtDollar(portfolioValue), variant: portfolioValue >= 0 ? 'gain' : 'loss',
       content: (
         <>
           <div className="mm-formula">
-            <span className="hl">Win Rate</span> = {winners.length} winners ÷ {trades.length} trades = <span className="gain">{fmtPct(winRate, 1)}</span>
+            <span className="hl">Account Value</span> = contributions + realized P&L + unrealized P&L + income{'\n'}
+            = <span className="hl">{fmtDollar(netContributions)}</span> + <span className={totalPL >= 0 ? 'gain' : 'loss'}>{fmtDollar(totalPL)}</span> + <span className={unrealizedPL >= 0 ? 'gain' : 'loss'}>{fmtDollar(unrealizedPL)}</span> + <span className="gain">{currentIncome != null ? fmtDollar(currentIncome) : '—'}</span> = <span className="hl">{fmtDollar(portfolioValue)}</span>
           </div>
           <table className="mm-table">
-            <thead><tr><th>Symbol</th><th>Close Date</th><th className="r">Net P&L</th><th className="r">Result</th></tr></thead>
+            <thead><tr><th>Component</th><th className="r">Value</th></tr></thead>
             <tbody>
-              {[...trades].sort((a,b) => b.net - a.net).map(t => (
-                <tr key={t.id}>
-                  <td>{t.symbol}</td>
-                  <td className="muted">{t.close_date}</td>
-                  <td className={`r ${t.net >= 0 ? 'gain-cell' : 'loss-cell'}`}>{fmtDollar(t.net)}</td>
-                  <td className={`r ${t.net >= 0 ? 'gain-cell' : 'loss-cell'}`}>{t.net >= 0 ? 'WIN' : 'LOSS'}</td>
-                </tr>
-              ))}
+              <tr><td>Net Contributions</td><td className="r">{fmtDollar(netContributions)}</td></tr>
+              <tr><td>Realized P&L</td><td className={`r ${totalPL >= 0 ? 'gain-cell' : 'loss-cell'}`}>{fmtDollar(totalPL)}</td></tr>
+              <tr><td>Unrealized P&L</td><td className={`r ${unrealizedPL >= 0 ? 'gain-cell' : 'loss-cell'}`}>{fmtDollar(unrealizedPL)}</td></tr>
+              <tr><td>Income</td><td className="r gain-cell">{currentIncome != null ? fmtDollar(currentIncome) : '—'}</td></tr>
+              <tr style={{ borderTop: '1px solid var(--bdr-mid)', fontWeight: 600 }}><td>Total Account Value</td><td className={`r ${portfolioValue >= 0 ? 'gain-cell' : 'loss-cell'}`}>{fmtDollar(portfolioValue)}</td></tr>
             </tbody>
           </table>
         </>
@@ -458,31 +468,70 @@ export default function Dashboard({ trades, spyData = {}, contributions = [], po
         </>
       ),
     },
-    'Open P&L': {
-      value: fmtDollar(unrealizedPL), variant: unrealizedPL >= 0 ? 'gain' : 'loss',
+    'Income': {
+      value: currentIncome != null ? fmtDollar(currentIncome) : '—', variant: 'gain',
       content: (
         <>
           <div className="mm-formula">
-            <span className="hl">Open P&L</span> = sum of (live price × shares − cost basis) per position
+            <span className="hl">Income</span> = manually logged dividend &amp; interest income.{'\n'}
+            Update whenever you want to record a new snapshot.
           </div>
-          <table className="mm-table">
-            <thead><tr><th>Symbol</th><th className="r">Shares</th><th className="r">Cost</th><th className="r">Live Price</th><th className="r">Unr P&L</th></tr></thead>
-            <tbody>
-              {positions.map(p => {
-                const price = prices[p.symbol]
-                const unr = price != null ? r2(price * p.shares - p.total_buy) : null
-                return (
-                  <tr key={p.id}>
-                    <td>{p.symbol}</td>
-                    <td className="r muted">{p.shares}</td>
-                    <td className="r muted">{fmtDollar(p.total_buy)}</td>
-                    <td className="r" style={{ color: price != null ? 'var(--cyan)' : 'var(--t3)' }}>{price != null ? fmtDollar(price) : '—'}</td>
-                    <td className={`r ${unr == null ? '' : unr >= 0 ? 'gain-cell' : 'loss-cell'}`}>{unr != null ? fmtDollar(unr) : '—'}</td>
+          <form onSubmit={handleAddIncome} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 16, flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: 10, color: 'var(--t3)', marginBottom: 3 }}>Date</div>
+              <input
+                className="form-input"
+                type="date"
+                value={incomeForm.date}
+                onChange={e => setIncomeForm(f => ({ ...f, date: e.target.value }))}
+                required
+                style={{ width: 140 }}
+              />
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: 'var(--t3)', marginBottom: 3 }}>Total Income $</div>
+              <input
+                className="form-input"
+                type="number"
+                step="0.01"
+                placeholder="e.g. 455.96"
+                value={incomeForm.amount}
+                onChange={e => setIncomeForm(f => ({ ...f, amount: e.target.value }))}
+                required
+                style={{ width: 130 }}
+              />
+            </div>
+            <div style={{ flex: 1, minWidth: 120 }}>
+              <div style={{ fontSize: 10, color: 'var(--t3)', marginBottom: 3 }}>Note (optional)</div>
+              <input
+                className="form-input"
+                type="text"
+                placeholder="e.g. cumulative thru Jul 2026"
+                value={incomeForm.note}
+                onChange={e => setIncomeForm(f => ({ ...f, note: e.target.value }))}
+                style={{ width: '100%' }}
+              />
+            </div>
+            <button type="submit" className="btn btn-primary" style={{ whiteSpace: 'nowrap' }}>Log</button>
+            {incomeError && <span className="form-error" style={{ width: '100%' }}>{incomeError}</span>}
+          </form>
+          {incomeLogs.length > 0 && (
+            <table className="mm-table">
+              <thead><tr><th>Date</th><th className="r">Amount</th><th>Note</th></tr></thead>
+              <tbody>
+                {[...incomeLogs].reverse().map(e => (
+                  <tr key={e.id}>
+                    <td className="muted">{e.date}</td>
+                    <td className="r gain-cell">{fmtDollar(e.amount)}</td>
+                    <td className="muted" style={{ fontSize: 11 }}>{e.note || '—'}</td>
                   </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {incomeLogs.length === 0 && (
+            <div style={{ color: 'var(--t3)', fontSize: 12 }}>No entries yet. Log your first income snapshot above.</div>
+          )}
         </>
       ),
     },
@@ -492,20 +541,25 @@ export default function Dashboard({ trades, spyData = {}, contributions = [], po
         <>
           <div className="mm-formula">
             <span className="hl">XIRR</span> = annualized internal rate of return on your contributions.{'\n'}
-            Each contribution is a cash outflow; current portfolio value is the final inflow.{'\n'}
-            Portfolio value = contributions + realized P&L + unrealized P&L{'\n'}
-            = <span className="hl">{fmtDollar(netContributions)}</span> + <span className={totalPL >= 0 ? 'gain' : 'loss'}>{fmtDollar(totalPL)}</span> + <span className={unrealizedPL >= 0 ? 'gain' : 'loss'}>{fmtDollar(unrealizedPL)}</span> = <span className="hl">{fmtDollar(portfolioValue)}</span>
+            Each contribution is a cash outflow; withdrawals/fees are inflows; current portfolio value is the final inflow.{'\n'}
+            Portfolio value = contributions + realized P&L + unrealized P&L + income{'\n'}
+            = <span className="hl">{fmtDollar(netContributions)}</span> + <span className={totalPL >= 0 ? 'gain' : 'loss'}>{fmtDollar(totalPL)}</span> + <span className={unrealizedPL >= 0 ? 'gain' : 'loss'}>{fmtDollar(unrealizedPL)}</span> + <span className="gain">{currentIncome != null ? fmtDollar(currentIncome) : '—'}</span> = <span className="hl">{fmtDollar(portfolioValue)}</span>
           </div>
           <table className="mm-table">
             <thead><tr><th>Date</th><th className="r">Cash Flow</th><th>Note</th></tr></thead>
             <tbody>
-              {contributions.map((c, i) => (
-                <tr key={i}>
-                  <td className="muted">{c.date}</td>
-                  <td className="r loss-cell">−{fmtDollar(c.amount)}</td>
-                  <td className="muted" style={{ fontSize: 11 }}>contribution</td>
-                </tr>
-              ))}
+              {contributions.map((c, i) => {
+                const flow = -c.amount
+                return (
+                  <tr key={i}>
+                    <td className="muted">{c.date}</td>
+                    <td className={`r ${flow >= 0 ? 'loss-cell' : 'gain-cell'}`}>
+                      {flow >= 0 ? `−${fmtDollar(c.amount)}` : `+${fmtDollar(Math.abs(c.amount))}`}
+                    </td>
+                    <td className="muted" style={{ fontSize: 11 }}>{c.note || 'contribution'}</td>
+                  </tr>
+                )
+              })}
               <tr>
                 <td className="muted">{new Date().toISOString().slice(0,10)}</td>
                 <td className="r gain-cell">+{fmtDollar(portfolioValue)}</td>
@@ -529,13 +583,13 @@ export default function Dashboard({ trades, spyData = {}, contributions = [], po
 
       {/* ── Metrics ── */}
       <div className="metric-grid-8">
+        <MetricCard label="Account Value"    value={fmtDollar(portfolioValue)}            variant={portfolioValue >= 0 ? 'gain' : 'loss'} secondary={<>contributions + realized + open</>}                                                                                      onClick={() => setModal('Account Value')} />
         <MetricCard label="Total P&L"        value={fmtDollar(totalPL)}                  variant={totalPL >= 0 ? 'gain' : 'loss'} secondary={<><span className="hl">{trades.length}</span> closed trades</>}                                                                    onClick={() => setModal('Total P&L')} />
-        <MetricCard label="Win Rate"         value={fmtPct(winRate, 1)}                   secondary={<><span className="hl">{winners.length}</span> of {trades.length} winners</>}                                                                                             onClick={() => setModal('Win Rate')} />
         <MetricCard label="Profit Factor"    value={pf === Infinity ? '∞' : fmtNum(pf)}  secondary={<>{fmtDollar(totalWin)} won / {fmtDollar(Math.abs(totalLoss))} lost</>}                                                                                                  onClick={() => setModal('Profit Factor')} />
         <MetricCard label="Return on Capital" value={fmtPct(returnOnCap, 2)}             variant={returnOnCap >= 0 ? 'gain' : 'loss'} secondary={<>on <span className="hl">{fmtDollar(totalCapital)}</span> deployed</>}                                                       onClick={() => setModal('Return on Capital')} />
         <MetricCard label="Avg Winner"       value={avgWinner != null ? fmtDollar(avgWinner) : '—'} variant="gain" secondary={bestWin  != null ? <>best: <span className="hl">{fmtDollar(bestWin)}</span></>  : null}                                                         onClick={() => setModal('Avg Winner')} />
         <MetricCard label="Avg Loser"        value={avgLoser  != null ? fmtDollar(avgLoser)  : '—'} variant="loss" secondary={worstLoss != null ? <>worst: <span className="hl">{fmtDollar(worstLoss)}</span></> : null}                                                      onClick={() => setModal('Avg Loser')} />
-        <MetricCard label="Open P&L"         value={fmtDollar(unrealizedPL)}             variant={unrealizedPL >= 0 ? 'gain' : 'loss'} secondary="unrealized across positions"                                                                                                onClick={() => setModal('Open P&L')} />
+        <MetricCard label="Income"             value={currentIncome != null ? fmtDollar(currentIncome) : '—'} variant="gain" secondary="dividends &amp; interest"                                                                                                         onClick={() => setModal('Income')} />
         <MetricCard label="XIRR"             value={xirrRate != null ? fmtPct(xirrRate, 2) : '—'} variant={xirrRate != null && xirrRate >= 0 ? 'gain' : 'loss'} secondary="annualized return on contributions"                                                               onClick={() => setModal('XIRR')} />
       </div>
 
@@ -549,15 +603,9 @@ export default function Dashboard({ trades, spyData = {}, contributions = [], po
 
       {/* ── Charts row 1 ── */}
       <div className="dash-section">
-        <div className="chart-2col">
-          <div className="chart-card">
-            <SectionLabel>Monthly P&amp;L</SectionLabel>
-            <MonthlyPL trades={trades} />
-          </div>
-          <div className="chart-card">
-            <SectionLabel>Hold Duration vs Return</SectionLabel>
-            <HoldScatter trades={trades} />
-          </div>
+        <div className="chart-card">
+          <SectionLabel>Monthly P&amp;L</SectionLabel>
+          <MonthlyPL trades={trades} />
         </div>
       </div>
 

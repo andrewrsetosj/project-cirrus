@@ -16,6 +16,8 @@ from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUse
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
 from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
 from plaid.model.investments_holdings_get_request import InvestmentsHoldingsGetRequest
+from plaid.model.investments_transactions_get_request import InvestmentsTransactionsGetRequest
+from datetime import date as _date
 from plaid.model.products import Products
 from plaid.model.country_code import CountryCode
 
@@ -94,6 +96,14 @@ def ensure_tables():
         CREATE TABLE IF NOT EXISTS kv (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        )
+    ''')
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS income_log (
+            id     INTEGER PRIMARY KEY,
+            date   TEXT NOT NULL,
+            amount REAL NOT NULL,
+            note   TEXT NOT NULL DEFAULT ''
         )
     ''')
     conn.commit()
@@ -490,6 +500,32 @@ def delete_contribution(cid):
     return '', 204
 
 
+# ── Income log ───────────────────────────────────────────────────────────────
+
+@app.get('/income')
+def get_income():
+    conn = get_db()
+    rows = conn.execute('SELECT * FROM income_log ORDER BY date ASC, id ASC').fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.post('/income')
+def add_income():
+    data = request.get_json(silent=True) or {}
+    if not data.get('date') or data.get('amount') is None:
+        return jsonify({'error': 'date and amount are required'}), 400
+    conn = get_db()
+    cur = conn.execute(
+        'INSERT INTO income_log (date, amount, note) VALUES (?,?,?)',
+        (data['date'], float(data['amount']), data.get('note', ''))
+    )
+    conn.commit()
+    row = conn.execute('SELECT * FROM income_log WHERE id=?', (cur.lastrowid,)).fetchone()
+    conn.close()
+    return jsonify(dict(row)), 201
+
+
 # ── Raw daily spark data (used for S&P overlay) ───────────────────────────────
 
 @app.get('/market/sparkdata')
@@ -617,6 +653,52 @@ def plaid_debug():
             InvestmentsHoldingsGetRequest(access_token=_plaid_access_token)
         ).to_dict()
         return jsonify(resp)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Plaid: investment transactions ───────────────────────────────────────────
+
+@app.get('/plaid/investment-transactions')
+def plaid_investment_transactions():
+    if not _plaid_access_token:
+        return jsonify({'error': 'not connected'}), 400
+    try:
+        start = _date(2020, 1, 1)
+        end   = _date.today()
+        resp  = _plaid.investments_transactions_get(
+            InvestmentsTransactionsGetRequest(
+                access_token=_plaid_access_token,
+                start_date=start,
+                end_date=end,
+            )
+        ).to_dict()
+
+        secs = {s['security_id']: s for s in (resp.get('securities') or [])}
+
+        txns = []
+        for t in (resp.get('investment_transactions') or []):
+            if t.get('type') not in ('buy', 'sell'):
+                continue
+            sec    = secs.get(t.get('security_id'), {})
+            ticker = (sec.get('ticker_symbol') or '').upper()
+            if not ticker:
+                continue
+            date_val = t.get('date')
+            txns.append({
+                'id':       t.get('investment_transaction_id'),
+                'date':     str(date_val) if date_val else '',
+                'ticker':   ticker,
+                'type':     t.get('type'),
+                'quantity': abs(float(t.get('quantity') or 0)),
+                'amount':   abs(float(t.get('amount')   or 0)),
+                'price':    t.get('price'),
+                'fees':     float(t.get('fees') or 0),
+                'name':     sec.get('name', ''),
+            })
+
+        txns.sort(key=lambda x: x['date'], reverse=True)
+        return jsonify(txns)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

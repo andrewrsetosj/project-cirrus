@@ -59,7 +59,7 @@ export default function Contributions({ contributions, onAdd, onDelete }) {
     <div>
       <div className="trades-panel-header">
         <div className="trades-title">
-          Contributions
+          Cash Flow
           <span className="trades-count">({contributions.length} entries)</span>
         </div>
         <button
@@ -106,7 +106,7 @@ export default function Contributions({ contributions, onAdd, onDelete }) {
           <tbody>
             {rows.length === 0 && (
               <tr className="empty-row">
-                <td colSpan={6}>No contributions yet. Click "+ Add Entry" to get started.</td>
+                <td colSpan={6}>No entries yet. Click "+ Add Entry" to get started.</td>
               </tr>
             )}
             {rows.map(c => (

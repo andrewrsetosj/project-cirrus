@@ -118,7 +118,9 @@ export default function App() {
 
   // ── Checkpoints ────────────────────────────────────────────────────────────
 
-  const [checkpoints, setCheckpoints] = useState([])
+  const [checkpoints,   setCheckpoints]   = useState([])
+  const [plaidHoldings, setPlaidHoldings] = useState([])
+  const [incomeLogs,    setIncomeLogs]    = useState([])
 
   const fetchCheckpoints = useCallback(async () => {
     const res = await fetch('/checkpoints')
@@ -145,6 +147,19 @@ export default function App() {
     setContributions(await res.json())
   }, [])
 
+  const fetchIncomeLogs = useCallback(async () => {
+    const res = await fetch('/income')
+    setIncomeLogs(await res.json())
+  }, [])
+
+  const addIncomeLog = async (data) => {
+    const res = await fetch('/income', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+    })
+    if (res.ok) { await fetchIncomeLogs(); return null }
+    return (await res.json()).error || 'Failed to add income entry.'
+  }
+
   const addContribution = async (data) => {
     const res = await fetch('/contributions', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
@@ -159,9 +174,18 @@ export default function App() {
   }
 
   useEffect(() => {
-    fetchTrades(); fetchPositions(); fetchCheckpoints(); fetchContributions()
+    fetchTrades(); fetchPositions(); fetchCheckpoints(); fetchContributions(); fetchIncomeLogs()
     fetch('/market/sparkdata?symbol=SPY&range=2y')
       .then(r => r.json()).then(d => setSpyData(d)).catch(() => {})
+    fetch('/plaid/status')
+      .then(r => r.json())
+      .then(d => {
+        if (d.connected) fetch('/plaid/holdings')
+          .then(r => r.json())
+          .then(h => { if (!h.error) setPlaidHoldings(h) })
+          .catch(() => {})
+      })
+      .catch(() => {})
   }, [fetchTrades, fetchPositions, fetchCheckpoints, fetchContributions])
 
   // Initial price load when positions arrive
@@ -179,8 +203,8 @@ export default function App() {
       <Header />
       <TabBar tab={tab} onTab={handleSetTab} positionCount={positions.length} checkpointCount={checkpoints.length} />
       <main className="main">
-        {tab === 'dashboard' && <Dashboard trades={trades} spyData={spyData} contributions={contributions} positions={positions} prices={prices} />}
-        {tab === 'trades'    && <Trades trades={trades} onAdd={addTrade} onDelete={deleteTrade} onUpdate={updateTrade} />}
+        {tab === 'dashboard' && <Dashboard trades={trades} spyData={spyData} contributions={contributions} positions={positions} prices={prices} incomeLogs={incomeLogs} onAddIncome={addIncomeLog} />}
+        {tab === 'trades'    && <Trades trades={trades} onAdd={addTrade} onDelete={deleteTrade} onUpdate={updateTrade} positions={positions} onClosePosition={closePosition} />}
         {tab === 'positions' && (
           <>
           <FidelityPositions />
