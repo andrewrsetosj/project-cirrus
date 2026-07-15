@@ -17,6 +17,10 @@
   --green-lo:  rgba(0,212,138,0.1);
   --red:       #ff4560;
   --red-lo:    rgba(255,69,96,0.1);
+  --mag:       #e040fb;
+  --mag-lo:    rgba(224,64,251,0.08);
+  --violet:    #a78bfa;
+  --amber:     #ffb340;
 
   --t1: #dde4f0;
   --t2: #7888a4;
@@ -36,7 +40,10 @@ body {
   font-family: var(--sans);
   font-size: 13px;
   line-height: 1.5;
-  background: var(--bg);
+  background:
+    repeating-linear-gradient(0deg, rgba(120,160,220,0.025) 0 1px, transparent 1px 44px),
+    repeating-linear-gradient(90deg, rgba(120,160,220,0.025) 0 1px, transparent 1px 44px),
+    var(--bg);
   color: var(--t1);
   -webkit-font-smoothing: antialiased;
 }
@@ -155,6 +162,7 @@ body {
 }
 
 .tab-btn {
+  --tac: var(--cyan);
   position: relative;
   background: none;
   border: none;
@@ -178,17 +186,24 @@ body {
 .tab-btn:hover { color: var(--t1); }
 
 .tab-btn.active {
-  color: var(--cyan);
-  border-bottom-color: var(--cyan);
+  color: var(--tac);
+  border-bottom-color: var(--tac);
+  text-shadow: 0 0 14px color-mix(in srgb, var(--tac) 45%, transparent);
 }
 
 .tab-icon {
   font-size: 13px;
-  opacity: 0.85;
+  color: var(--tac);
+  opacity: 0.7;
+}
+
+.tab-btn.active .tab-icon {
+  opacity: 1;
+  filter: drop-shadow(0 0 5px var(--tac));
 }
 
 .tab-badge {
-  background: var(--cyan);
+  background: var(--tac);
   color: #030913;
   font-size: 10px;
   font-weight: 700;
@@ -263,6 +278,32 @@ body {
   border: 1px solid var(--bdr);
   border-radius: var(--r);
   overflow: hidden;
+  position: relative;
+}
+
+/* HUD corner brackets */
+.sym-table-wrap::before,
+.sym-table-wrap::after {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+  border-color: rgba(0,200,225,0.55);
+  border-style: solid;
+  z-index: 2;
+}
+
+.sym-table-wrap::before {
+  top: 0; left: 0;
+  border-width: 2px 0 0 2px;
+  border-radius: 4px 0 0 0;
+}
+
+.sym-table-wrap::after {
+  bottom: 0; right: 0;
+  border-width: 0 2px 2px 0;
+  border-radius: 0 0 4px 0;
 }
 
 .sym-table {
@@ -292,9 +333,12 @@ body {
 }
 
 .sym-table tbody tr:last-child { border-bottom: none; }
-.sym-table tbody tr:hover { background: var(--bg-hover); }
+.sym-table tbody tr:hover {
+  background: linear-gradient(90deg, rgba(0,200,225,0.10), rgba(0,200,225,0.02) 40%, transparent);
+}
 
-.sym-table tbody td { padding: 9px 14px; }
+.sym-table tbody td { padding: 9px 14px; border-left: 2px solid transparent; }
+.sym-table tbody tr:hover td:first-child { border-left-color: var(--cyan); }
 
 .sym-cell   { font-family: var(--mono); font-weight: 600; font-size: 13px; letter-spacing: 0.05em; color: var(--t1); }
 .num-cell   { font-family: var(--mono); font-size: 12px; text-align: right; color: var(--t1); }
@@ -303,6 +347,7 @@ body {
 .muted-cell { color: var(--t2)    !important; }
 
 .metric-card {
+  --mc: var(--cyan);
   background: var(--bg-card);
   border: 1px solid var(--bdr);
   border-radius: var(--r);
@@ -312,13 +357,16 @@ body {
   transition: border-color 0.18s, box-shadow 0.18s;
 }
 
+.metric-card.gain { --mc: var(--green); }
+.metric-card.loss { --mc: var(--red); }
+
 .metric-card::after {
   content: '';
   position: absolute;
   top: 0; left: 16px; right: 16px;
   height: 1px;
-  background: linear-gradient(90deg, transparent, var(--cyan), transparent);
-  opacity: 0.35;
+  background: linear-gradient(90deg, transparent, var(--mc), transparent);
+  opacity: 0.45;
 }
 
 .metric-card:hover {
@@ -331,8 +379,8 @@ body {
 }
 
 .metric-card-clickable:hover {
-  border-color: var(--bdr-cyan) !important;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.25), 0 0 0 1px rgba(0,200,225,0.1) !important;
+  border-color: color-mix(in srgb, var(--mc) 45%, transparent) !important;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.25), 0 0 18px color-mix(in srgb, var(--mc) 12%, transparent) !important;
 }
 
 .metric-hint {
@@ -600,7 +648,7 @@ tbody tr {
 tbody tr:last-child { border-bottom: none; }
 
 tbody tr:hover {
-  background: var(--bg-hover);
+  background: linear-gradient(90deg, rgba(0,200,225,0.10), rgba(0,200,225,0.02) 40%, transparent);
 }
 
 tbody tr:hover .cell-sym {

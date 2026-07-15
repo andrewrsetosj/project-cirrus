@@ -5,6 +5,7 @@ import urllib.request
 import urllib.parse
 import json as _json
 import ssl
+import threading
 import time as _time
 from datetime import datetime as _dt, timezone as _tz
 from concurrent.futures import ThreadPoolExecutor
@@ -104,6 +105,14 @@ def ensure_tables():
             date   TEXT NOT NULL,
             amount REAL NOT NULL,
             note   TEXT NOT NULL DEFAULT ''
+        )
+    ''')
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS market_cache (
+            symbol TEXT NOT NULL,
+            date   TEXT NOT NULL,
+            close  REAL NOT NULL,
+            PRIMARY KEY (symbol, date)
         )
     ''')
     conn.commit()
@@ -527,6 +536,56 @@ def add_income():
 
 
 # ── Raw daily spark data (used for S&P overlay) ───────────────────────────────
+# Daily closes are cached in the market_cache table: requests are served from
+# SQLite instantly, and a background thread tops up the tail from Yahoo at most
+# once per _MARKET_TTL. Only a cold cache (new symbol / earlier start) blocks.
+
+_MARKET_TTL        = 900   # seconds before a background refresh is triggered
+_market_refreshed  = {}    # symbol -> _time.monotonic() of last Yahoo refresh
+_market_refreshing = set()
+_market_lock       = threading.Lock()
+
+
+def _yahoo_closes(sym, period1, period2):
+    url = (f'https://query1.finance.yahoo.com/v8/finance/chart/{sym}'
+           f'?period1={period1}&period2={period2}&interval=1d')
+    req = urllib.request.Request(url, headers=_HEADERS)
+    with urllib.request.urlopen(req, timeout=15, context=_SSL) as r:
+        data = _json.loads(r.read())
+    result     = (data.get('chart', {}).get('result') or [{}])[0]
+    timestamps = result.get('timestamp') or []
+    closes_raw = (result.get('indicators', {}).get('quote') or [{}])[0].get('close') or []
+    out = {}
+    for ts, c in zip(timestamps, closes_raw):
+        if c is not None:
+            out[_dt.fromtimestamp(ts, tz=_tz.utc).strftime('%Y-%m-%d')] = round(float(c), 2)
+    return out
+
+
+def _store_closes(sym, closes):
+    if not closes:
+        return
+    conn = get_db()
+    conn.executemany(
+        'INSERT OR REPLACE INTO market_cache (symbol, date, close) VALUES (?, ?, ?)',
+        [(sym, d, c) for d, c in closes.items()])
+    conn.commit()
+    conn.close()
+
+
+def _refresh_market_cache(sym, from_date):
+    try:
+        period1 = int(_dt.strptime(from_date, '%Y-%m-%d').replace(tzinfo=_tz.utc).timestamp())
+        period2 = int(_dt.now(_tz.utc).timestamp())
+        _store_closes(sym, _yahoo_closes(sym, period1, period2))
+        with _market_lock:
+            _market_refreshed[sym] = _time.monotonic()
+    except Exception:
+        pass
+    finally:
+        with _market_lock:
+            _market_refreshing.discard(sym)
+
 
 @app.get('/market/sparkdata')
 def market_sparkdata():
@@ -535,16 +594,36 @@ def market_sparkdata():
     range_ = request.args.get('range', '2y')
     try:
         if start:
+            conn = get_db()
+            rows = conn.execute(
+                'SELECT date, close FROM market_cache WHERE symbol = ? AND date >= ? ORDER BY date',
+                (sym, start)).fetchall()
+            conn.close()
+            cached = {r['date']: r['close'] for r in rows}
+            # usable if the first cached close is within a week of the requested
+            # start (the first trading day can trail a weekend/holiday start)
+            first  = min(cached) if cached else None
+            covers = first is not None and (
+                _dt.strptime(first, '%Y-%m-%d') - _dt.strptime(start, '%Y-%m-%d')).days <= 7
+            if covers:
+                with _market_lock:
+                    stale = _time.monotonic() - _market_refreshed.get(sym, float('-inf')) > _MARKET_TTL
+                    spawn = stale and sym not in _market_refreshing
+                    if spawn:
+                        _market_refreshing.add(sym)
+                if spawn:
+                    # re-fetch from the last cached day so an intraday close gets finalized
+                    threading.Thread(target=_refresh_market_cache,
+                                     args=(sym, max(cached)), daemon=True).start()
+                return jsonify(cached)
+            # cold cache: fetch the full window synchronously, then serve from SQLite next time
             period1 = int(_dt.strptime(start, '%Y-%m-%d').replace(tzinfo=_tz.utc).timestamp())
             period2 = int(_dt.now(_tz.utc).timestamp())
-            url = (f'https://query1.finance.yahoo.com/v8/finance/chart/{sym}'
-                   f'?period1={period1}&period2={period2}&interval=1d')
-            req = urllib.request.Request(url, headers=_HEADERS)
-            with urllib.request.urlopen(req, timeout=15, context=_SSL) as r:
-                data = _json.loads(r.read())
-            result     = (data.get('chart', {}).get('result') or [{}])[0]
-            timestamps = result.get('timestamp') or []
-            closes_raw = (result.get('indicators', {}).get('quote') or [{}])[0].get('close') or []
+            out = _yahoo_closes(sym, period1, period2)
+            _store_closes(sym, out)
+            with _market_lock:
+                _market_refreshed[sym] = _time.monotonic()
+            return jsonify(out)
         else:
             url = (f'https://query1.finance.yahoo.com/v7/finance/spark?symbols={sym}'
                    f'&range={range_}&interval=1d')

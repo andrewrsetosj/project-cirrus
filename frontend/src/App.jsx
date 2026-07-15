@@ -16,6 +16,8 @@ export default function App() {
   const [prices,        setPrices]        = useState({})
   const [pricesLoading, setPricesLoading] = useState(false)
   const [spyData,        setSpyData]        = useState({})
+  const [indexPrices,    setIndexPrices]    = useState({})
+  const [indexHistory,   setIndexHistory]   = useState({ VOO: {}, QQQ: {} })
   const [contributions,  setContributions]  = useState([])
   const validTabs = ['dashboard', 'trades', 'positions', 'contributions', 'research', 'checkpoint']
   const [tab, setTab] = useState(() => {
@@ -186,12 +188,23 @@ export default function App() {
       .catch(() => {})
   }, [fetchTrades, fetchPositions, fetchCheckpoints, fetchContributions])
 
-  // Fetch SPY history starting from earliest contribution date
+  // Fetch benchmark history (SPY/VOO/QQQ) starting from earliest contribution
+  // date. Lives here rather than in Dashboard so tab switches don't refetch.
   useEffect(() => {
     if (!contributions.length) return
     const start = contributions.reduce((min, c) => c.date < min ? c.date : min, contributions[0].date)
     fetch(`/market/sparkdata?symbol=SPY&start=${start}`)
       .then(r => r.json()).then(d => setSpyData(d)).catch(() => {})
+    Promise.all([
+      fetch('/market/prices?symbols=SPY,VOO,QQQ').then(r => r.json()),
+      fetch(`/market/sparkdata?symbol=VOO&start=${start}`).then(r => r.json()),
+      fetch(`/market/sparkdata?symbol=QQQ&start=${start}`).then(r => r.json()),
+    ]).then(([idxPrices, vooHist, qqqHist]) => {
+      const flat = {}
+      Object.entries(idxPrices).forEach(([sym, info]) => { if (info?.price != null) flat[sym] = info.price })
+      setIndexPrices(flat)
+      setIndexHistory({ VOO: vooHist, QQQ: qqqHist })
+    }).catch(() => {})
   }, [contributions])
 
   // Initial price load when positions arrive
@@ -209,11 +222,10 @@ export default function App() {
       <Header />
       <TabBar tab={tab} onTab={handleSetTab} positionCount={positions.length} checkpointCount={checkpoints.length} />
       <main className="main">
-        {tab === 'dashboard' && <Dashboard trades={trades} spyData={spyData} contributions={contributions} positions={positions} prices={prices} incomeLogs={incomeLogs} onAddIncome={addIncomeLog} />}
+        {tab === 'dashboard' && <Dashboard trades={trades} spyData={spyData} indexPrices={indexPrices} indexHistory={indexHistory} contributions={contributions} positions={positions} prices={prices} incomeLogs={incomeLogs} onAddIncome={addIncomeLog} />}
         {tab === 'trades'    && <Trades trades={trades} onAdd={addTrade} onDelete={deleteTrade} onUpdate={updateTrade} positions={positions} onClosePosition={closePosition} />}
         {tab === 'positions' && (
           <>
-          <FidelityPositions />
           <Positions
             positions={positions} prices={prices} pricesLoading={pricesLoading}
             onRefreshPrices={refreshPrices} onAdd={addPosition} onUpdate={updatePosition}

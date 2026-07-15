@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import { r2, tradeCategory, xirr } from '../utils/compute'
 import { fmtDollar, fmtPct, fmtNum } from '../utils/format'
 import MetricCard from './MetricCard'
@@ -280,29 +280,12 @@ function TopTradesTable({ trades, variant }) {
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
-export default function Dashboard({ trades, spyData = {}, contributions = [], positions = [], prices = {}, incomeLogs = [], onAddIncome }) {
+export default function Dashboard({ trades, spyData = {}, indexPrices = {}, indexHistory = { VOO: {}, QQQ: {} }, contributions = [], positions = [], prices = {}, incomeLogs = [], onAddIncome }) {
   if (!trades.length) return null
 
   const [modal, setModal] = useState(null)
   const [incomeForm, setIncomeForm] = useState({ date: new Date().toISOString().slice(0, 10), amount: '', note: '' })
   const [incomeError, setIncomeError] = useState('')
-  const [indexPrices,   setIndexPrices]   = useState({})
-  const [indexHistory,  setIndexHistory]  = useState({ VOO: {}, QQQ: {} })
-
-  useEffect(() => {
-    if (!contributions.length) return
-    const start = contributions.reduce((min, c) => c.date < min ? c.date : min, contributions[0].date)
-    Promise.all([
-      fetch('/market/prices?symbols=SPY,VOO,QQQ').then(r => r.json()),
-      fetch(`/market/sparkdata?symbol=VOO&start=${start}`).then(r => r.json()),
-      fetch(`/market/sparkdata?symbol=QQQ&start=${start}`).then(r => r.json()),
-    ]).then(([prices, vooHist, qqqHist]) => {
-      const flat = {}
-      Object.entries(prices).forEach(([sym, info]) => { if (info?.price != null) flat[sym] = info.price })
-      setIndexPrices(flat)
-      setIndexHistory({ VOO: vooHist, QQQ: qqqHist })
-    }).catch(() => {})
-  }, [contributions])
 
   const currentIncome = incomeLogs.length ? incomeLogs[incomeLogs.length - 1].amount : null
 
@@ -445,7 +428,7 @@ export default function Dashboard({ trades, spyData = {}, contributions = [], po
       ),
     },
     'Return on Capital': {
-      value: fmtPct(returnOnCap, 2), variant: returnOnCap >= 0 ? 'gain' : 'loss',
+      value: fmtPct(returnOnCap, 2), variant: '',
       content: (
         <>
           <div className="mm-formula">
@@ -517,7 +500,7 @@ export default function Dashboard({ trades, spyData = {}, contributions = [], po
       ),
     },
     'Income': {
-      value: currentIncome != null ? fmtDollar(currentIncome) : '—', variant: 'gain',
+      value: currentIncome != null ? fmtDollar(currentIncome) : '—', variant: '',
       content: (
         <>
           <div className="mm-formula">
@@ -584,7 +567,7 @@ export default function Dashboard({ trades, spyData = {}, contributions = [], po
       ),
     },
     'XIRR': {
-      value: xirrRate != null ? fmtPct(xirrRate, 2) : '—', variant: xirrRate != null && xirrRate >= 0 ? 'gain' : 'loss',
+      value: xirrRate != null ? fmtPct(xirrRate, 2) : '—', variant: '',
       content: (
         <>
           <div className="mm-formula">
@@ -678,18 +661,18 @@ export default function Dashboard({ trades, spyData = {}, contributions = [], po
         <MetricCard label="Account Value"     value={fmtDollar(portfolioValue)}            variant={portfolioValue >= 0 ? 'gain' : 'loss'} secondary={<>contributions + realized + open</>}                                                                                      onClick={() => setModal('Account Value')} />
         <MetricCard label="Total P&L"         value={fmtDollar(totalPL)}                  variant={totalPL >= 0 ? 'gain' : 'loss'} secondary={<><span className="hl">{trades.length}</span> closed trades</>}                                                                    onClick={() => setModal('Total P&L')} />
         <MetricCard label="Profit Factor"     value={pf === Infinity ? '∞' : fmtNum(pf)}  secondary={<>{fmtDollar(totalWin)} won / {fmtDollar(Math.abs(totalLoss))} lost</>}                                                                                                  onClick={() => setModal('Profit Factor')} />
-        <MetricCard label="Return on Capital" value={fmtPct(returnOnCap, 2)}              variant={returnOnCap >= 0 ? 'gain' : 'loss'} secondary={<>on <span className="hl">{fmtDollar(totalCapital)}</span> deployed</>}                                                       onClick={() => setModal('Return on Capital')} />
-        <MetricCard label="XIRR"              value={xirrRate != null ? fmtPct(xirrRate, 2) : '—'} variant={xirrRate != null && xirrRate >= 0 ? 'gain' : 'loss'} secondary="annualized return on contributions"                                                               onClick={() => setModal('XIRR')} />
+        <MetricCard label="Return on Capital" value={fmtPct(returnOnCap, 2)}              secondary={<>on <span className="hl">{fmtDollar(totalCapital)}</span> deployed</>}                                                                                                    onClick={() => setModal('Return on Capital')} />
+        <MetricCard label="XIRR"              value={xirrRate != null ? fmtPct(xirrRate, 2) : '—'} secondary="annualized return on contributions"                                                                                                                             onClick={() => setModal('XIRR')} />
         <MetricCard label="Avg Winner"        value={avgWinner != null ? fmtDollar(avgWinner) : '—'} variant="gain" secondary={bestWin  != null ? <>best: <span className="hl">{fmtDollar(bestWin)}</span></>  : null}                                                         onClick={() => setModal('Avg Winner')} />
         <MetricCard label="Avg Loser"         value={avgLoser  != null ? fmtDollar(avgLoser)  : '—'} variant="loss" secondary={worstLoss != null ? <>worst: <span className="hl">{fmtDollar(worstLoss)}</span></> : null}                                                      onClick={() => setModal('Avg Loser')} />
         <MetricCard label="Largest Gain"      value={largestGain != null ? fmtDollar(largestGain.net) : '—'} variant="gain" secondary={largestGain ? <><span className="hl">{largestGain.symbol}</span> · {largestGain.close_date}</> : null}                                  onClick={() => setModal('Largest Gain')} />
         <MetricCard label="Largest Loss"      value={largestLoss != null ? fmtDollar(largestLoss.net) : '—'} variant="loss" secondary={largestLoss ? <><span className="hl">{largestLoss.symbol}</span> · {largestLoss.close_date}</> : null}                                  onClick={() => setModal('Largest Loss')} />
-        <MetricCard label="Income"            value={currentIncome != null ? fmtDollar(currentIncome) : '—'} variant="gain" secondary="dividends &amp; interest"                                                                                                               onClick={() => setModal('Income')} />
+        <MetricCard label="Income"            value={currentIncome != null ? fmtDollar(currentIncome) : '—'} secondary="dividends &amp; interest"                                                                                                                              onClick={() => setModal('Income')} />
       </div>
 
       {/* ── Index Fund Equivalency ── */}
       <div className="dash-section">
-        <SectionLabel>If You Had Invested in Index Funds (since first contribution)</SectionLabel>
+        <SectionLabel>Index Fund Benchmark</SectionLabel>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
           {[
             { sym: 'SPY', history: spyData },

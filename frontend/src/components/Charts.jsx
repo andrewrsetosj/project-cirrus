@@ -28,6 +28,21 @@ const CYAN   = '#00c8e1'
 const barCols    = vals => vals.map(v => v >= 0 ? GAIN : LOSS)
 const borderCols = vals => vals.map(v => v >= 0 ? GAIN_B : LOSS_B)
 
+// Neon glow: datasets opt in with a `glow` color; benchmarks stay flat
+const neonGlow = {
+  id: 'neonGlow',
+  beforeDatasetDraw(chart, args) {
+    const glow = chart.data.datasets[args.index]?.glow
+    if (!glow) return
+    chart.ctx.save()
+    chart.ctx.shadowColor = glow
+    chart.ctx.shadowBlur = 8
+  },
+  afterDatasetDraw(chart, args) {
+    if (chart.data.datasets[args.index]?.glow) chart.ctx.restore()
+  },
+}
+
 const fmtTip = v => {
   const abs = Math.abs(v).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
   return (v < 0 ? '  -$' : '  $') + abs
@@ -70,9 +85,53 @@ const axisTitle = text => ({
 
 // ── Equity Curve ─────────────────────────────────────────────────────────────
 export const INDEX_COLORS = {
-  SPY: '#c8845a',  // muted clay
-  VOO: '#5fa882',  // muted sage
-  QQQ: '#8878c3',  // muted lavender
+  SPY: '#bd7042',  // muted clay
+  VOO: '#3f9a6e',  // muted sage
+  QQQ: '#7f6fbd',  // muted lavender
+}
+
+// Direct labels at each line's end (datasets opt in with `endLabel`)
+const endLabels = {
+  id: 'endLabels',
+  afterDatasetsDraw(chart) {
+    const { ctx } = chart
+    chart.data.datasets.forEach((ds, di) => {
+      if (!ds.endLabel) return
+      const meta = chart.getDatasetMeta(di)
+      let el = null
+      for (let i = meta.data.length - 1; i >= 0; i--) {
+        if (ds.data[i] != null) { el = meta.data[i]; break }
+      }
+      if (!el) return
+      ctx.save()
+      ctx.font = '600 10px "JetBrains Mono", monospace'
+      ctx.fillStyle = ds.borderColor
+      ctx.textBaseline = 'middle'
+      ctx.fillText(ds.endLabel, el.x + 7, el.y)
+      ctx.restore()
+    })
+  },
+}
+
+// Dashed vertical crosshair at the hovered index
+const crosshair = {
+  id: 'crosshair',
+  afterDraw(chart) {
+    const active = chart.tooltip?.getActiveElements?.() ?? []
+    if (!active.length) return
+    const x = active[0].element.x
+    const { top, bottom } = chart.chartArea
+    const { ctx } = chart
+    ctx.save()
+    ctx.strokeStyle = 'rgba(0,200,225,0.35)'
+    ctx.lineWidth = 1
+    ctx.setLineDash([3, 3])
+    ctx.beginPath()
+    ctx.moveTo(x, top)
+    ctx.lineTo(x, bottom)
+    ctx.stroke()
+    ctx.restore()
+  },
 }
 
 function lookupPrice(history, dateStr) {
@@ -139,11 +198,11 @@ export function EquityCurve({ trades, spyData = {}, contributions = [], indexHis
         if (!line) return []
         return [{
           label: sym,
+          endLabel: sym,
           data: line,
           borderColor: INDEX_COLORS[sym],
           borderWidth: 1.5,
-          borderDash: [4, 3],
-          pointRadius: 0,
+          pointRadius: ctx => ctx.dataIndex === line.length - 1 ? 2.5 : 0,
           pointHoverRadius: 4,
           pointBackgroundColor: INDEX_COLORS[sym],
           fill: false,
@@ -156,18 +215,19 @@ export function EquityCurve({ trades, spyData = {}, contributions = [], indexHis
   return (
     <div style={{ height: 220 }}>
       <Line
+        plugins={[neonGlow, endLabels, crosshair]}
         data={{
           labels,
           datasets: [
             {
-              label: '_equity',
+              label: 'Portfolio',
+              endLabel: 'YOU',
               data,
+              glow: color === CYAN ? 'rgba(0,200,225,0.65)' : 'rgba(255,69,96,0.55)',
               borderColor: color,
-              borderWidth: 2,
-              pointRadius: 3,
-              pointBackgroundColor: data.map((v, i) =>
-                i === data.length - 1 ? color : 'transparent'
-              ),
+              borderWidth: 2.25,
+              pointRadius: ctx => ctx.dataIndex === data.length - 1 ? 3.5 : 0,
+              pointBackgroundColor: color,
               pointBorderColor: color,
               pointHoverRadius: 5,
               fill: true,
@@ -200,28 +260,31 @@ export function EquityCurve({ trades, spyData = {}, contributions = [], indexHis
           responsive: true,
           maintainAspectRatio: false,
           animation: { duration: 600 },
+          layout: { padding: { right: 44 } },
+          interaction: { mode: 'index', intersect: false },
           plugins: {
             legend: {
               display: true,
-              position: 'top',
-              align: 'end',
+              position: 'bottom',
+              align: 'start',
               labels: {
-                filter: item => item.text !== '_equity',
-                color: 'rgba(255,255,255,0.35)',
+                filter: item => item.text !== 'Break Even',
+                color: '#7888a4',
                 font: { family: 'Inter', size: 10 },
                 boxWidth: 18,
-                boxHeight: 1,
-                padding: 8,
+                boxHeight: 2,
+                padding: 10,
               },
             },
             tooltip: {
               ...tooltipBase,
               filter: item => item.dataset.label !== 'Break Even',
+              itemSort: (a, b) => b.parsed.y - a.parsed.y,
               callbacks: {
                 title: ctx => ctx[0]?.label ?? '',
                 label: ctx => {
                   const lbl = ctx.dataset.label
-                  const prefix = lbl === '_equity' ? '  Your P&L' : `  ${lbl} equiv`
+                  const prefix = lbl === 'Portfolio' ? '  Your P&L' : `  ${lbl} equiv`
                   return `${prefix}: ${fmtTip(ctx.parsed.y).trim()}`
                 },
               }
