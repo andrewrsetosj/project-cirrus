@@ -175,8 +175,6 @@ export default function App() {
 
   useEffect(() => {
     fetchTrades(); fetchPositions(); fetchCheckpoints(); fetchContributions(); fetchIncomeLogs()
-    fetch('/market/sparkdata?symbol=SPY&range=2y')
-      .then(r => r.json()).then(d => setSpyData(d)).catch(() => {})
     fetch('/plaid/status')
       .then(r => r.json())
       .then(d => {
@@ -187,6 +185,14 @@ export default function App() {
       })
       .catch(() => {})
   }, [fetchTrades, fetchPositions, fetchCheckpoints, fetchContributions])
+
+  // Fetch SPY history starting from earliest contribution date
+  useEffect(() => {
+    if (!contributions.length) return
+    const start = contributions.reduce((min, c) => c.date < min ? c.date : min, contributions[0].date)
+    fetch(`/market/sparkdata?symbol=SPY&start=${start}`)
+      .then(r => r.json()).then(d => setSpyData(d)).catch(() => {})
+  }, [contributions])
 
   // Initial price load when positions arrive
   useEffect(() => { if (positions.length) fetchPrices(positions) }, [positions, fetchPrices])

@@ -226,6 +226,13 @@ body {
   margin-bottom: 16px;
 }
 
+.metric-grid-10 {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
 .chart-full {
   background: var(--bg-card);
   border: 1px solid var(--bdr);
@@ -1205,12 +1212,14 @@ tbody tr:hover td:first-child {
 
 /* ── Responsive ─────────────────────────────────────────────────────────── */
 @media (max-width: 1200px) {
-  .metric-grid   { grid-template-columns: repeat(3, 1fr); }
-  .metric-grid-8 { grid-template-columns: repeat(4, 1fr); }
+  .metric-grid    { grid-template-columns: repeat(3, 1fr); }
+  .metric-grid-8  { grid-template-columns: repeat(4, 1fr); }
+  .metric-grid-10 { grid-template-columns: repeat(5, 1fr); }
 }
 @media (max-width: 1024px) {
-  .metric-grid-8 { grid-template-columns: repeat(2, 1fr); }
-  .chart-2col    { grid-template-columns: 1fr; }
+  .metric-grid-8  { grid-template-columns: repeat(2, 1fr); }
+  .metric-grid-10 { grid-template-columns: repeat(2, 1fr); }
+  .chart-2col     { grid-template-columns: 1fr; }
 }
 @media (max-width: 860px) {
   .metric-grid { grid-template-columns: repeat(2, 1fr); }

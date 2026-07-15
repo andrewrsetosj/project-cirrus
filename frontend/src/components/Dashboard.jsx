@@ -1,9 +1,9 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { r2, tradeCategory, xirr } from '../utils/compute'
 import { fmtDollar, fmtPct, fmtNum } from '../utils/format'
 import MetricCard from './MetricCard'
 import MetricModal from './MetricModal'
-import { EquityCurve, SymbolPL, MonthlyPL, WinLossChart, HoldScatter } from './Charts'
+import { EquityCurve, SymbolPL, MonthlyPL, WinLossChart, HoldScatter, INDEX_COLORS } from './Charts'
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 const fmtMonth = m => { const [y, mo] = m.split('-'); return `${MONTHS[+mo-1]} '${y.slice(2)}` }
@@ -286,6 +286,23 @@ export default function Dashboard({ trades, spyData = {}, contributions = [], po
   const [modal, setModal] = useState(null)
   const [incomeForm, setIncomeForm] = useState({ date: new Date().toISOString().slice(0, 10), amount: '', note: '' })
   const [incomeError, setIncomeError] = useState('')
+  const [indexPrices,   setIndexPrices]   = useState({})
+  const [indexHistory,  setIndexHistory]  = useState({ VOO: {}, QQQ: {} })
+
+  useEffect(() => {
+    if (!contributions.length) return
+    const start = contributions.reduce((min, c) => c.date < min ? c.date : min, contributions[0].date)
+    Promise.all([
+      fetch('/market/prices?symbols=SPY,VOO,QQQ').then(r => r.json()),
+      fetch(`/market/sparkdata?symbol=VOO&start=${start}`).then(r => r.json()),
+      fetch(`/market/sparkdata?symbol=QQQ&start=${start}`).then(r => r.json()),
+    ]).then(([prices, vooHist, qqqHist]) => {
+      const flat = {}
+      Object.entries(prices).forEach(([sym, info]) => { if (info?.price != null) flat[sym] = info.price })
+      setIndexPrices(flat)
+      setIndexHistory({ VOO: vooHist, QQQ: qqqHist })
+    }).catch(() => {})
+  }, [contributions])
 
   const currentIncome = incomeLogs.length ? incomeLogs[incomeLogs.length - 1].amount : null
 
@@ -309,9 +326,38 @@ export default function Dashboard({ trades, spyData = {}, contributions = [], po
   const avgLoser     = losers.length  ? r2(totalLoss / losers.length)  : null
   const bestWin      = winners.length ? Math.max(...winners.map(t => t.net)) : null
   const worstLoss    = losers.length  ? Math.min(...losers.map(t => t.net)) : null
+  const largestGain  = bestWin != null ? winners.find(t => t.net === bestWin) : null
+  const largestLoss  = worstLoss != null ? losers.find(t => t.net === worstLoss) : null
   const avgHoldDays  = Math.round(trades.reduce((s, t) => s + t.days_held, 0) / trades.length)
   const totalCapital = r2(trades.reduce((s, t) => s + t.total_buy, 0))
   const returnOnCap  = totalCapital > 0 ? totalPL / totalCapital : 0
+
+  // Lookup a price from a history dict, searching up to 5 days back for weekends/holidays
+  const lookupPrice = (history, dateStr) => {
+    if (history[dateStr] != null) return history[dateStr]
+    for (let i = 1; i <= 5; i++) {
+      const d = new Date(dateStr); d.setDate(d.getDate() - i)
+      const s = d.toISOString().slice(0, 10)
+      if (history[s] != null) return history[s]
+    }
+    return null
+  }
+
+  const firstInvestDate = trades.length
+    ? trades.reduce((min, t) => t.open_date < min ? t.open_date : min, trades[0].open_date)
+    : null
+
+  // Simulate investing all contributions into a fund (buys on deposits, sells on withdrawals/fees)
+  // Contributions before firstInvestDate are clamped to that date so cash sitting idle isn't counted
+  const simulateFundValue = (history, currentPrice) => {
+    if (!currentPrice || !Object.keys(history).length) return null
+    const totalShares = contributions.reduce((sum, c) => {
+      const buyOn = firstInvestDate && c.date < firstInvestDate ? firstInvestDate : c.date
+      const price = lookupPrice(history, buyOn)
+      return price ? sum + c.amount / price : sum
+    }, 0)
+    return totalShares > 0 ? r2(totalShares * currentPrice) : null
+  }
 
   const netContributions = r2(contributions.reduce((s, c) => s + c.amount, 0))
   const unrealizedPL = r2(positions.reduce((s, p) => {
@@ -572,6 +618,50 @@ export default function Dashboard({ trades, spyData = {}, contributions = [], po
         </>
       ),
     },
+    'Largest Gain': {
+      value: largestGain ? fmtDollar(largestGain.net) : '—', variant: 'gain',
+      content: largestGain ? (
+        <>
+          <div className="mm-formula">
+            Best single closed trade: <span className="hl">{largestGain.symbol}</span> closed {largestGain.close_date}
+          </div>
+          <table className="mm-table">
+            <thead><tr><th>Field</th><th className="r">Value</th></tr></thead>
+            <tbody>
+              <tr><td>Open date</td><td className="r muted">{largestGain.open_date}</td></tr>
+              <tr><td>Shares</td><td className="r muted">{largestGain.shares}</td></tr>
+              <tr><td>Cost basis</td><td className="r muted">{fmtDollar(largestGain.total_buy)}</td></tr>
+              <tr><td>Proceeds</td><td className="r muted">{fmtDollar(largestGain.total_sell)}</td></tr>
+              <tr><td>Net P&L</td><td className="r gain-cell">{fmtDollar(largestGain.net)}</td></tr>
+              <tr><td>Return</td><td className="r gain-cell">{fmtPct(largestGain.performance)}</td></tr>
+              <tr><td>Days held</td><td className="r muted">{largestGain.days_held}</td></tr>
+            </tbody>
+          </table>
+        </>
+      ) : null,
+    },
+    'Largest Loss': {
+      value: largestLoss ? fmtDollar(largestLoss.net) : '—', variant: 'loss',
+      content: largestLoss ? (
+        <>
+          <div className="mm-formula">
+            Worst single closed trade: <span className="hl">{largestLoss.symbol}</span> closed {largestLoss.close_date}
+          </div>
+          <table className="mm-table">
+            <thead><tr><th>Field</th><th className="r">Value</th></tr></thead>
+            <tbody>
+              <tr><td>Open date</td><td className="r muted">{largestLoss.open_date}</td></tr>
+              <tr><td>Shares</td><td className="r muted">{largestLoss.shares}</td></tr>
+              <tr><td>Cost basis</td><td className="r muted">{fmtDollar(largestLoss.total_buy)}</td></tr>
+              <tr><td>Proceeds</td><td className="r muted">{fmtDollar(largestLoss.total_sell)}</td></tr>
+              <tr><td>Net P&L</td><td className="r loss-cell">{fmtDollar(largestLoss.net)}</td></tr>
+              <tr><td>Return</td><td className="r loss-cell">{fmtPct(largestLoss.performance)}</td></tr>
+              <tr><td>Days held</td><td className="r muted">{largestLoss.days_held}</td></tr>
+            </tbody>
+          </table>
+        </>
+      ) : null,
+    },
   }
 
   return (
@@ -584,22 +674,59 @@ export default function Dashboard({ trades, spyData = {}, contributions = [], po
       )}
 
       {/* ── Metrics ── */}
-      <div className="metric-grid-8">
-        <MetricCard label="Account Value"    value={fmtDollar(portfolioValue)}            variant={portfolioValue >= 0 ? 'gain' : 'loss'} secondary={<>contributions + realized + open</>}                                                                                      onClick={() => setModal('Account Value')} />
-        <MetricCard label="Total P&L"        value={fmtDollar(totalPL)}                  variant={totalPL >= 0 ? 'gain' : 'loss'} secondary={<><span className="hl">{trades.length}</span> closed trades</>}                                                                    onClick={() => setModal('Total P&L')} />
-        <MetricCard label="Profit Factor"    value={pf === Infinity ? '∞' : fmtNum(pf)}  secondary={<>{fmtDollar(totalWin)} won / {fmtDollar(Math.abs(totalLoss))} lost</>}                                                                                                  onClick={() => setModal('Profit Factor')} />
-        <MetricCard label="Return on Capital" value={fmtPct(returnOnCap, 2)}             variant={returnOnCap >= 0 ? 'gain' : 'loss'} secondary={<>on <span className="hl">{fmtDollar(totalCapital)}</span> deployed</>}                                                       onClick={() => setModal('Return on Capital')} />
-        <MetricCard label="Avg Winner"       value={avgWinner != null ? fmtDollar(avgWinner) : '—'} variant="gain" secondary={bestWin  != null ? <>best: <span className="hl">{fmtDollar(bestWin)}</span></>  : null}                                                         onClick={() => setModal('Avg Winner')} />
-        <MetricCard label="Avg Loser"        value={avgLoser  != null ? fmtDollar(avgLoser)  : '—'} variant="loss" secondary={worstLoss != null ? <>worst: <span className="hl">{fmtDollar(worstLoss)}</span></> : null}                                                      onClick={() => setModal('Avg Loser')} />
-        <MetricCard label="Income"             value={currentIncome != null ? fmtDollar(currentIncome) : '—'} variant="gain" secondary="dividends &amp; interest"                                                                                                         onClick={() => setModal('Income')} />
-        <MetricCard label="XIRR"             value={xirrRate != null ? fmtPct(xirrRate, 2) : '—'} variant={xirrRate != null && xirrRate >= 0 ? 'gain' : 'loss'} secondary="annualized return on contributions"                                                               onClick={() => setModal('XIRR')} />
+      <div className="metric-grid-10">
+        <MetricCard label="Account Value"     value={fmtDollar(portfolioValue)}            variant={portfolioValue >= 0 ? 'gain' : 'loss'} secondary={<>contributions + realized + open</>}                                                                                      onClick={() => setModal('Account Value')} />
+        <MetricCard label="Total P&L"         value={fmtDollar(totalPL)}                  variant={totalPL >= 0 ? 'gain' : 'loss'} secondary={<><span className="hl">{trades.length}</span> closed trades</>}                                                                    onClick={() => setModal('Total P&L')} />
+        <MetricCard label="Profit Factor"     value={pf === Infinity ? '∞' : fmtNum(pf)}  secondary={<>{fmtDollar(totalWin)} won / {fmtDollar(Math.abs(totalLoss))} lost</>}                                                                                                  onClick={() => setModal('Profit Factor')} />
+        <MetricCard label="Return on Capital" value={fmtPct(returnOnCap, 2)}              variant={returnOnCap >= 0 ? 'gain' : 'loss'} secondary={<>on <span className="hl">{fmtDollar(totalCapital)}</span> deployed</>}                                                       onClick={() => setModal('Return on Capital')} />
+        <MetricCard label="XIRR"              value={xirrRate != null ? fmtPct(xirrRate, 2) : '—'} variant={xirrRate != null && xirrRate >= 0 ? 'gain' : 'loss'} secondary="annualized return on contributions"                                                               onClick={() => setModal('XIRR')} />
+        <MetricCard label="Avg Winner"        value={avgWinner != null ? fmtDollar(avgWinner) : '—'} variant="gain" secondary={bestWin  != null ? <>best: <span className="hl">{fmtDollar(bestWin)}</span></>  : null}                                                         onClick={() => setModal('Avg Winner')} />
+        <MetricCard label="Avg Loser"         value={avgLoser  != null ? fmtDollar(avgLoser)  : '—'} variant="loss" secondary={worstLoss != null ? <>worst: <span className="hl">{fmtDollar(worstLoss)}</span></> : null}                                                      onClick={() => setModal('Avg Loser')} />
+        <MetricCard label="Largest Gain"      value={largestGain != null ? fmtDollar(largestGain.net) : '—'} variant="gain" secondary={largestGain ? <><span className="hl">{largestGain.symbol}</span> · {largestGain.close_date}</> : null}                                  onClick={() => setModal('Largest Gain')} />
+        <MetricCard label="Largest Loss"      value={largestLoss != null ? fmtDollar(largestLoss.net) : '—'} variant="loss" secondary={largestLoss ? <><span className="hl">{largestLoss.symbol}</span> · {largestLoss.close_date}</> : null}                                  onClick={() => setModal('Largest Loss')} />
+        <MetricCard label="Income"            value={currentIncome != null ? fmtDollar(currentIncome) : '—'} variant="gain" secondary="dividends &amp; interest"                                                                                                               onClick={() => setModal('Income')} />
+      </div>
+
+      {/* ── Index Fund Equivalency ── */}
+      <div className="dash-section">
+        <SectionLabel>If You Had Invested in Index Funds (since first contribution)</SectionLabel>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+          {[
+            { sym: 'SPY', history: spyData },
+            { sym: 'VOO', history: indexHistory.VOO },
+            { sym: 'QQQ', history: indexHistory.QQQ },
+          ].map(({ sym, history }) => {
+            const price    = indexPrices[sym]
+            const simValue = simulateFundValue(history, price)
+            const diff     = simValue != null ? r2(portfolioValue - simValue) : null
+            const loading  = !price || !Object.keys(history).length
+            return (
+              <div key={sym} className="metric-card" style={{ display: 'flex', flexDirection: 'column', gap: 6, borderTop: `2px solid ${INDEX_COLORS[sym]}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                  <span className="metric-label" style={{ color: INDEX_COLORS[sym] }}>{sym}</span>
+                  <span style={{ fontSize: 11, color: 'var(--t3)' }}>{price ? `@ ${fmtDollar(price)}/sh` : '—'}</span>
+                </div>
+                <div className="metric-value" style={{ fontSize: 26 }}>
+                  {simValue != null ? fmtDollar(simValue) : loading ? <span style={{ color: 'var(--t3)', fontSize: 16 }}>loading…</span> : '—'}
+                </div>
+                {diff != null && (
+                  <div className="metric-secondary">
+                    you&apos;re <span className={diff >= 0 ? 'gain' : 'loss'} style={{ fontWeight: 600 }}>
+                      {diff >= 0 ? '+' : ''}{fmtDollar(diff)}
+                    </span> {diff >= 0 ? 'ahead' : 'behind'}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
       </div>
 
       {/* ── Equity Curve ── */}
       <div className="dash-section">
         <SectionLabel>Equity Curve — Cumulative P&amp;L</SectionLabel>
         <div className="chart-full">
-          <EquityCurve trades={trades} spyData={spyData} contributions={contributions} />
+          <EquityCurve trades={trades} spyData={spyData} contributions={contributions} indexHistory={indexHistory} />
         </div>
       </div>
 

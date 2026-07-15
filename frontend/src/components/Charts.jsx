@@ -69,69 +69,89 @@ const axisTitle = text => ({
 })
 
 // ── Equity Curve ─────────────────────────────────────────────────────────────
-const SPY_COLOR = '#f5a623'
+export const INDEX_COLORS = {
+  SPY: '#c8845a',  // muted clay
+  VOO: '#5fa882',  // muted sage
+  QQQ: '#8878c3',  // muted lavender
+}
 
-function findSpyPrice(spyData, dateStr) {
-  if (spyData[dateStr] != null) return spyData[dateStr]
+function lookupPrice(history, dateStr) {
+  if (history[dateStr] != null) return history[dateStr]
   const d = new Date(dateStr + 'T12:00:00Z')
   for (let i = 1; i <= 5; i++) {
     d.setUTCDate(d.getUTCDate() - 1)
     const s = d.toISOString().slice(0, 10)
-    if (spyData[s] != null) return spyData[s]
+    if (history[s] != null) return history[s]
   }
   return null
 }
 
-export function EquityCurve({ trades, spyData = {}, contributions = [] }) {
+function buildFundLine(history, contributions, sorted, startDate) {
+  if (!Object.keys(history).length) return null
+  const tranches = contributions
+    .map(c => {
+      const buyOn = startDate && c.date < startDate ? startDate : c.date
+      const price = lookupPrice(history, buyOn)
+      return price ? { date: buyOn, shares: c.amount / price, cost: c.amount } : null
+    })
+    .filter(Boolean)
+  if (!tranches.length) return null
+
+  const line = sorted.map(t => {
+    const priceNow = lookupPrice(history, t.close_date)
+    if (!priceNow) return null
+    const active = tranches.filter(tr => tr.date <= t.close_date)
+    if (!active.length) return null
+    const value    = r2(active.reduce((s, tr) => s + tr.shares * priceNow, 0))
+    const costSoFar = r2(active.reduce((s, tr) => s + tr.cost, 0))
+    return r2(value - costSoFar)
+  })
+  return [null, 0, ...line]
+}
+
+export function EquityCurve({ trades, spyData = {}, contributions = [], indexHistory = {} }) {
   const sorted = [...trades].sort((a, b) =>
     a.close_date < b.close_date ? -1 : a.close_date > b.close_date ? 1 : a.id - b.id
   )
+  const firstInvestDate = trades.length
+    ? trades.reduce((min, t) => t.open_date < min ? t.open_date : min, trades[0].open_date)
+    : null
+  const accountDate = contributions.length
+    ? contributions.reduce((min, c) => c.date < min ? c.date : min, contributions[0].date)
+    : ''
+
   let cum = 0
-  const data   = sorted.map(t => { cum = r2(cum + t.net); return cum })
-  const labels = sorted.map(t => `${t.symbol} · ${t.close_date}`)
+  const tradeData   = sorted.map(t => { cum = r2(cum + t.net); return cum })
+  const tradeLabels = sorted.map(t => `${t.symbol} · ${t.close_date}`)
+
+  const data   = [0, 0, ...tradeData]
+  const labels = [`Creation · ${accountDate}`, `Start · ${firstInvestDate ?? accountDate}`, ...tradeLabels]
 
   const color = data[data.length - 1] >= 0 ? CYAN : LOSS_B
 
-  // S&P overlay: simulate buying SPY on each contribution date, track P&L vs contributions made so far
-  const hasSpy = Object.keys(spyData).length > 0 && sorted.length > 0 && contributions.length > 0
-  let spyLine = null
-  if (hasSpy) {
-    // pre-compute SPY shares bought per contribution
-    const spyTranches = contributions
-      .filter(c => c.amount > 0)
-      .map(c => {
-        const price = findSpyPrice(spyData, c.date)
-        return price ? { date: c.date, shares: c.amount / price, cost: c.amount } : null
+  const fundDatasets = sorted.length && contributions.length
+    ? [
+        { sym: 'SPY', history: spyData },
+        { sym: 'VOO', history: indexHistory.VOO ?? {} },
+        { sym: 'QQQ', history: indexHistory.QQQ ?? {} },
+      ].flatMap(({ sym, history }) => {
+        const line = buildFundLine(history, contributions, sorted, firstInvestDate)
+        if (!line) return []
+        return [{
+          label: sym,
+          data: line,
+          borderColor: INDEX_COLORS[sym],
+          borderWidth: 1.5,
+          borderDash: [4, 3],
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          pointBackgroundColor: INDEX_COLORS[sym],
+          fill: false,
+          tension: 0.35,
+          spanGaps: true,
+        }]
       })
-      .filter(Boolean)
-
-    if (spyTranches.length > 0) {
-      spyLine = sorted.map(t => {
-        const spyNow = findSpyPrice(spyData, t.close_date)
-        if (!spyNow) return null
-        // only include tranches invested on or before this trade's close date
-        const active = spyTranches.filter(tr => tr.date <= t.close_date)
-        if (!active.length) return null
-        const spyValue = r2(active.reduce((s, tr) => s + tr.shares * spyNow, 0))
-        const costSoFar = r2(active.reduce((s, tr) => s + tr.cost, 0))
-        return r2(spyValue - costSoFar)
-      })
-    }
-  }
-
-  const spyDataset = spyLine ? [{
-    label: 'S&P 500 (SPY)',
-    data: spyLine,
-    borderColor: SPY_COLOR,
-    borderWidth: 1.5,
-    borderDash: [4, 3],
-    pointRadius: 0,
-    pointHoverRadius: 4,
-    pointBackgroundColor: SPY_COLOR,
-    fill: false,
-    tension: 0.35,
-    spanGaps: true,
-  }] : []
+    : []
 
   return (
     <div style={{ height: 220 }}>
@@ -173,7 +193,7 @@ export function EquityCurve({ trades, spyData = {}, contributions = [] }) {
               fill: false,
               tension: 0,
             },
-            ...spyDataset,
+            ...fundDatasets,
           ]
         }}
         options={{
@@ -186,7 +206,7 @@ export function EquityCurve({ trades, spyData = {}, contributions = [] }) {
               position: 'top',
               align: 'end',
               labels: {
-                filter: item => item.text === 'Break Even' || item.text === 'S&P 500 (SPY)',
+                filter: item => item.text !== '_equity',
                 color: 'rgba(255,255,255,0.35)',
                 font: { family: 'Inter', size: 10 },
                 boxWidth: 18,
@@ -198,10 +218,11 @@ export function EquityCurve({ trades, spyData = {}, contributions = [] }) {
               ...tooltipBase,
               filter: item => item.dataset.label !== 'Break Even',
               callbacks: {
-                title: ctx => ctx[0].label,
+                title: ctx => ctx[0]?.label ?? '',
                 label: ctx => {
-                  const label = ctx.dataset.label === 'S&P 500 (SPY)' ? '  SPY equiv' : '  Your P&L'
-                  return `${label}: ${fmtTip(ctx.parsed.y).trim()}`
+                  const lbl = ctx.dataset.label
+                  const prefix = lbl === '_equity' ? '  Your P&L' : `  ${lbl} equiv`
+                  return `${prefix}: ${fmtTip(ctx.parsed.y).trim()}`
                 },
               }
             }

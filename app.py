@@ -531,19 +531,32 @@ def add_income():
 @app.get('/market/sparkdata')
 def market_sparkdata():
     sym    = request.args.get('symbol', 'SPY').upper()
+    start  = request.args.get('start')   # optional YYYY-MM-DD
     range_ = request.args.get('range', '2y')
     try:
-        url = (f'https://query1.finance.yahoo.com/v7/finance/spark?symbols={sym}'
-               f'&range={range_}&interval=1d')
-        req = urllib.request.Request(url, headers=_HEADERS)
-        with urllib.request.urlopen(req, timeout=15, context=_SSL) as r:
-            data = _json.loads(r.read())
-        items = data['spark'].get('result') or []
-        if not items:
-            return jsonify({})
-        resp       = (items[0].get('response') or [{}])[0]
-        timestamps = resp.get('timestamp') or []
-        closes_raw = (resp.get('indicators', {}).get('quote') or [{}])[0].get('close') or []
+        if start:
+            period1 = int(_dt.strptime(start, '%Y-%m-%d').replace(tzinfo=_tz.utc).timestamp())
+            period2 = int(_dt.now(_tz.utc).timestamp())
+            url = (f'https://query1.finance.yahoo.com/v8/finance/chart/{sym}'
+                   f'?period1={period1}&period2={period2}&interval=1d')
+            req = urllib.request.Request(url, headers=_HEADERS)
+            with urllib.request.urlopen(req, timeout=15, context=_SSL) as r:
+                data = _json.loads(r.read())
+            result     = (data.get('chart', {}).get('result') or [{}])[0]
+            timestamps = result.get('timestamp') or []
+            closes_raw = (result.get('indicators', {}).get('quote') or [{}])[0].get('close') or []
+        else:
+            url = (f'https://query1.finance.yahoo.com/v7/finance/spark?symbols={sym}'
+                   f'&range={range_}&interval=1d')
+            req = urllib.request.Request(url, headers=_HEADERS)
+            with urllib.request.urlopen(req, timeout=15, context=_SSL) as r:
+                data = _json.loads(r.read())
+            items = data['spark'].get('result') or []
+            if not items:
+                return jsonify({})
+            resp       = (items[0].get('response') or [{}])[0]
+            timestamps = resp.get('timestamp') or []
+            closes_raw = (resp.get('indicators', {}).get('quote') or [{}])[0].get('close') or []
         out = {}
         for ts, c in zip(timestamps, closes_raw):
             if c is not None:
