@@ -115,8 +115,29 @@ def ensure_tables():
             PRIMARY KEY (symbol, date)
         )
     ''')
+    # account column ('ira' | 'brokerage') on money-scoped tables; existing rows
+    # default to 'ira'. checkpoints/market_cache stay global.
+    for table in ('trades', 'open_positions', 'contributions', 'income_log'):
+        cols = [r[1] for r in conn.execute(f'PRAGMA table_info({table})')]
+        if cols and 'account' not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN account TEXT NOT NULL DEFAULT 'ira'")
     conn.commit()
     conn.close()
+
+
+ACCOUNTS = ('ira', 'brokerage')
+
+
+def account_filter():
+    """Account from query string: 'ira'/'brokerage' filters, anything else (or absent) = all."""
+    acct = (request.args.get('account') or 'all').lower()
+    return acct if acct in ACCOUNTS else None
+
+
+def body_account(data):
+    """Account for new rows, from the request body. Defaults to 'ira'."""
+    acct = (data.get('account') or 'ira').lower()
+    return acct if acct in ACCOUNTS else 'ira'
 
 
 # ── Static / index ────────────────────────────────────────────────────────────
@@ -130,8 +151,11 @@ def index():
 
 @app.get('/trades')
 def get_trades():
+    acct = account_filter()
     conn = get_db()
-    rows = conn.execute('SELECT * FROM trades ORDER BY id ASC').fetchall()
+    rows = (conn.execute('SELECT * FROM trades WHERE account = ? ORDER BY id ASC', (acct,))
+            if acct else
+            conn.execute('SELECT * FROM trades ORDER BY id ASC')).fetchall()
     conn.close()
     return jsonify([dict(r) for r in rows])
 
@@ -146,9 +170,9 @@ def add_trade():
 
     conn = get_db()
     cur = conn.execute(
-        'INSERT INTO trades (symbol, open_date, close_date, shares, total_buy, total_sell) VALUES (?,?,?,?,?,?)',
+        'INSERT INTO trades (symbol, open_date, close_date, shares, total_buy, total_sell, account) VALUES (?,?,?,?,?,?,?)',
         (data['symbol'].upper(), data['open_date'], data['close_date'],
-         int(data['shares']), float(data['total_buy']), float(data['total_sell']))
+         int(data['shares']), float(data['total_buy']), float(data['total_sell']), body_account(data))
     )
     conn.commit()
     row = conn.execute('SELECT * FROM trades WHERE id = ?', (cur.lastrowid,)).fetchone()
@@ -195,8 +219,11 @@ def delete_trade(trade_id):
 
 @app.get('/positions')
 def get_positions():
+    acct = account_filter()
     conn = get_db()
-    rows = conn.execute('SELECT * FROM open_positions ORDER BY open_date ASC').fetchall()
+    rows = (conn.execute('SELECT * FROM open_positions WHERE account = ? ORDER BY open_date ASC', (acct,))
+            if acct else
+            conn.execute('SELECT * FROM open_positions ORDER BY open_date ASC')).fetchall()
     conn.close()
     return jsonify([dict(r) for r in rows])
 
@@ -211,8 +238,8 @@ def add_position():
 
     conn = get_db()
     cur = conn.execute(
-        'INSERT INTO open_positions (symbol, open_date, shares, total_buy) VALUES (?,?,?,?)',
-        (data['symbol'].upper(), data['open_date'], int(data['shares']), float(data['total_buy']))
+        'INSERT INTO open_positions (symbol, open_date, shares, total_buy, account) VALUES (?,?,?,?,?)',
+        (data['symbol'].upper(), data['open_date'], int(data['shares']), float(data['total_buy']), body_account(data))
     )
     conn.commit()
     row = conn.execute('SELECT * FROM open_positions WHERE id = ?', (cur.lastrowid,)).fetchone()
@@ -270,9 +297,10 @@ def close_position(pos_id):
 
     pos = dict(pos)
     cur = conn.execute(
-        'INSERT INTO trades (symbol, open_date, close_date, shares, total_buy, total_sell) VALUES (?,?,?,?,?,?)',
+        'INSERT INTO trades (symbol, open_date, close_date, shares, total_buy, total_sell, account) VALUES (?,?,?,?,?,?,?)',
         (pos['symbol'], pos['open_date'], data['close_date'],
-         pos['shares'], pos['total_buy'], float(data['total_sell']))
+         pos['shares'], pos['total_buy'], float(data['total_sell']),
+         pos.get('account', 'ira'))
     )
     trade_id = cur.lastrowid
     conn.execute('DELETE FROM open_positions WHERE id = ?', (pos_id,))
@@ -476,8 +504,11 @@ def market_prices():
 
 @app.get('/contributions')
 def get_contributions():
+    acct = account_filter()
     conn = get_db()
-    rows = conn.execute('SELECT * FROM contributions ORDER BY date ASC, id ASC').fetchall()
+    rows = (conn.execute('SELECT * FROM contributions WHERE account = ? ORDER BY date ASC, id ASC', (acct,))
+            if acct else
+            conn.execute('SELECT * FROM contributions ORDER BY date ASC, id ASC')).fetchall()
     conn.close()
     return jsonify([dict(r) for r in rows])
 
@@ -489,8 +520,8 @@ def add_contribution():
         return jsonify({'error': 'date and amount are required'}), 400
     conn = get_db()
     cur = conn.execute(
-        'INSERT INTO contributions (date, amount, note) VALUES (?,?,?)',
-        (data['date'], float(data['amount']), data.get('note', ''))
+        'INSERT INTO contributions (date, amount, note, account) VALUES (?,?,?,?)',
+        (data['date'], float(data['amount']), data.get('note', ''), body_account(data))
     )
     conn.commit()
     row = conn.execute('SELECT * FROM contributions WHERE id=?', (cur.lastrowid,)).fetchone()
@@ -513,8 +544,11 @@ def delete_contribution(cid):
 
 @app.get('/income')
 def get_income():
+    acct = account_filter()
     conn = get_db()
-    rows = conn.execute('SELECT * FROM income_log ORDER BY date ASC, id ASC').fetchall()
+    rows = (conn.execute('SELECT * FROM income_log WHERE account = ? ORDER BY date ASC, id ASC', (acct,))
+            if acct else
+            conn.execute('SELECT * FROM income_log ORDER BY date ASC, id ASC')).fetchall()
     conn.close()
     return jsonify([dict(r) for r in rows])
 
@@ -526,8 +560,8 @@ def add_income():
         return jsonify({'error': 'date and amount are required'}), 400
     conn = get_db()
     cur = conn.execute(
-        'INSERT INTO income_log (date, amount, note) VALUES (?,?,?)',
-        (data['date'], float(data['amount']), data.get('note', ''))
+        'INSERT INTO income_log (date, amount, note, account) VALUES (?,?,?,?)',
+        (data['date'], float(data['amount']), data.get('note', ''), body_account(data))
     )
     conn.commit()
     row = conn.execute('SELECT * FROM income_log WHERE id=?', (cur.lastrowid,)).fetchone()

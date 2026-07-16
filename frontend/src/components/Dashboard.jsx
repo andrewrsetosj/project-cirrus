@@ -287,7 +287,15 @@ export default function Dashboard({ trades, spyData = {}, indexPrices = {}, inde
   const [incomeForm, setIncomeForm] = useState({ date: new Date().toISOString().slice(0, 10), amount: '', note: '' })
   const [incomeError, setIncomeError] = useState('')
 
-  const currentIncome = incomeLogs.length ? incomeLogs[incomeLogs.length - 1].amount : null
+  // Income entries are cumulative snapshots per account: take each account's
+  // latest and sum, so the combined view adds accounts instead of showing
+  // whichever account logged most recently.
+  const currentIncome = (() => {
+    if (!incomeLogs.length) return null
+    const latest = {}
+    incomeLogs.forEach(e => { latest[e.account ?? 'ira'] = e.amount })
+    return r2(Object.values(latest).reduce((s, v) => s + v, 0))
+  })()
 
   const handleAddIncome = async e => {
     e.preventDefault()
@@ -507,7 +515,7 @@ export default function Dashboard({ trades, spyData = {}, indexPrices = {}, inde
             <span className="hl">Income</span> = manually logged dividend &amp; interest income.{'\n'}
             Update whenever you want to record a new snapshot.
           </div>
-          <form onSubmit={handleAddIncome} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 16, flexWrap: 'wrap' }}>
+          {onAddIncome ? <form onSubmit={handleAddIncome} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 16, flexWrap: 'wrap' }}>
             <div>
               <div style={{ fontSize: 10, color: 'var(--t3)', marginBottom: 3 }}>Date</div>
               <input
@@ -545,7 +553,7 @@ export default function Dashboard({ trades, spyData = {}, indexPrices = {}, inde
             </div>
             <button type="submit" className="btn btn-primary" style={{ whiteSpace: 'nowrap' }}>Log</button>
             {incomeError && <span className="form-error" style={{ width: '100%' }}>{incomeError}</span>}
-          </form>
+          </form> : <div className="acct-hint" style={{ marginBottom: 16 }}>switch to IRA or Brokerage to log income</div>}
           {incomeLogs.length > 0 && (
             <table className="mm-table">
               <thead><tr><th>Date</th><th className="r">Amount</th><th>Note</th></tr></thead>

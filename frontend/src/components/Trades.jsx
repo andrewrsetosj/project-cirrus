@@ -211,12 +211,16 @@ export default function Trades({ trades, onAdd, onDelete, onUpdate, positions, o
           >
             {syncOpen ? '✕  Cancel Sync' : '↓ Sync from Fidelity'}
           </button>
-          <button
-            className={`btn ${formOpen ? 'btn-ghost' : 'btn-primary'}`}
-            onClick={() => { setFormOpen(o => !o); setSyncOpen(false) }}
-          >
-            {formOpen ? '✕  Cancel' : '+ Add Trade'}
-          </button>
+          {onAdd ? (
+            <button
+              className={`btn ${formOpen ? 'btn-ghost' : 'btn-primary'}`}
+              onClick={() => { setFormOpen(o => !o); setSyncOpen(false) }}
+            >
+              {formOpen ? '✕  Cancel' : '+ Add Trade'}
+            </button>
+          ) : (
+            <span className="acct-hint">switch to IRA or Brokerage to add</span>
+          )}
         </div>
       </div>
 

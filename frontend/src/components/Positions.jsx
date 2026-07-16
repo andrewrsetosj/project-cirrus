@@ -333,9 +333,13 @@ export default function Positions({ positions, prices, pricesLoading, onRefreshP
           <button className="btn btn-ghost" onClick={onRefreshPrices} disabled={pricesLoading} style={{ fontSize: 11 }}>
             {pricesLoading ? '↻ Updating…' : '↻ Refresh Prices'}
           </button>
-          <button className={`btn ${formOpen ? 'btn-ghost' : 'btn-primary'}`} onClick={() => setFormOpen(o => !o)}>
-            {formOpen ? '✕  Cancel' : '+ Add Position'}
-          </button>
+          {onAdd ? (
+            <button className={`btn ${formOpen ? 'btn-ghost' : 'btn-primary'}`} onClick={() => setFormOpen(o => !o)}>
+              {formOpen ? '✕  Cancel' : '+ Add Position'}
+            </button>
+          ) : (
+            <span className="acct-hint">switch to IRA or Brokerage to add</span>
+          )}
         </div>
       </div>
 

@@ -124,6 +124,47 @@ body {
   letter-spacing: 0.02em;
 }
 
+/* ── Account switcher ───────────────────────────────────────────────────── */
+.acct-switch {
+  display: inline-flex;
+  border: 1px solid var(--bdr-mid);
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255,255,255,0.03);
+}
+
+.acct-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: var(--sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--t2);
+  padding: 6px 16px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.acct-btn:hover { color: var(--t1); }
+
+.acct-btn.active {
+  background: var(--cyan);
+  color: #030913;
+  text-shadow: none;
+}
+
+.acct-btn.active:not(:first-child):not(:last-child) { background: var(--violet); }
+.acct-btn.active:last-child { background: var(--t2); }
+
+/* hint shown where an add-form would be, in the ALL (combined) view */
+.acct-hint {
+  font-size: 11px;
+  color: var(--t3);
+  letter-spacing: 0.04em;
+  padding: 8px 0;
+}
+
 .header-status {
   display: flex;
   align-items: center;
@@ -1156,10 +1197,8 @@ tbody tr:hover td:first-child {
 }
 
 .dp-cal {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 999;
+  /* positioned via inline style (fixed, portaled to body so no ancestor clips it) */
+  z-index: 1200;
   background: #111928;
   border: 1px solid rgba(0,200,225,0.35);
   border-radius: var(--r);

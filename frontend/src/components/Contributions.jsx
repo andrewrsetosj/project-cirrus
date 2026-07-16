@@ -62,12 +62,16 @@ export default function Contributions({ contributions, onAdd, onDelete }) {
           Cash Flow
           <span className="trades-count">({contributions.length} entries)</span>
         </div>
-        <button
-          className={`btn ${formOpen ? 'btn-ghost' : 'btn-primary'}`}
-          onClick={() => setFormOpen(o => !o)}
-        >
-          {formOpen ? '✕  Cancel' : '+ Add Entry'}
-        </button>
+        {onAdd ? (
+          <button
+            className={`btn ${formOpen ? 'btn-ghost' : 'btn-primary'}`}
+            onClick={() => setFormOpen(o => !o)}
+          >
+            {formOpen ? '✕  Cancel' : '+ Add Entry'}
+          </button>
+        ) : (
+          <span className="acct-hint">switch to IRA or Brokerage to add</span>
+        )}
       </div>
 
       <AddContributionForm open={formOpen} onAdd={onAdd} onClose={() => setFormOpen(false)} />
