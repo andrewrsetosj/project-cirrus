@@ -168,7 +168,8 @@ function buildFundLine(history, contributions, sorted, startDate) {
   return [null, 0, ...line]
 }
 
-export function EquityCurve({ trades, spyData = {}, contributions = [], indexHistory = {} }) {
+export function EquityCurve({ account = 'ira', trades, spyData = {}, contributions = [], indexHistory = {} }) {
+  const isAll = account === 'all'
   const sorted = [...trades].sort((a, b) =>
     a.close_date < b.close_date ? -1 : a.close_date > b.close_date ? 1 : a.id - b.id
   )
@@ -187,6 +188,7 @@ export function EquityCurve({ trades, spyData = {}, contributions = [], indexHis
   const labels = [`Creation · ${accountDate}`, `Start · ${firstInvestDate ?? accountDate}`, ...tradeLabels]
 
   const color = data[data.length - 1] >= 0 ? CYAN : LOSS_B
+  const lineLabel = isAll ? 'Total' : 'Portfolio'
 
   const fundDatasets = sorted.length && contributions.length
     ? [
@@ -220,8 +222,8 @@ export function EquityCurve({ trades, spyData = {}, contributions = [], indexHis
           labels,
           datasets: [
             {
-              label: 'Portfolio',
-              endLabel: 'YOU',
+              label: lineLabel,
+              endLabel: isAll ? 'TOTAL' : 'YOU',
               data,
               glow: color === CYAN ? 'rgba(0,200,225,0.65)' : 'rgba(255,69,96,0.55)',
               borderColor: color,
@@ -284,7 +286,7 @@ export function EquityCurve({ trades, spyData = {}, contributions = [], indexHis
                 title: ctx => ctx[0]?.label ?? '',
                 label: ctx => {
                   const lbl = ctx.dataset.label
-                  const prefix = lbl === 'Portfolio' ? '  Your P&L' : `  ${lbl} equiv`
+                  const prefix = lbl === lineLabel ? `  ${isAll ? 'Total' : 'Your'} P&L` : `  ${lbl} equiv`
                   return `${prefix}: ${fmtTip(ctx.parsed.y).trim()}`
                 },
               }

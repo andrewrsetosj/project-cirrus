@@ -280,7 +280,7 @@ function TopTradesTable({ trades, variant }) {
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
-export default function Dashboard({ trades, spyData = {}, indexPrices = {}, indexHistory = { VOO: {}, QQQ: {} }, contributions = [], positions = [], prices = {}, incomeLogs = [], onAddIncome }) {
+export default function Dashboard({ account = 'ira', trades, spyData = {}, indexPrices = {}, indexHistory = { VOO: {}, QQQ: {} }, contributions = [], positions = [], prices = {}, incomeLogs = [], onAddIncome }) {
   if (!trades.length) return null
 
   const [modal, setModal] = useState(null)
@@ -717,7 +717,7 @@ export default function Dashboard({ trades, spyData = {}, indexPrices = {}, inde
       <div className="dash-section">
         <SectionLabel>Equity Curve — Cumulative P&amp;L</SectionLabel>
         <div className="chart-full">
-          <EquityCurve trades={trades} spyData={spyData} contributions={contributions} indexHistory={indexHistory} />
+          <EquityCurve account={account} trades={trades} spyData={spyData} contributions={contributions} indexHistory={indexHistory} />
         </div>
       </div>
 

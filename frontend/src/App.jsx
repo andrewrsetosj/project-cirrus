@@ -255,7 +255,7 @@ export default function App() {
       <Header account={account} onAccount={handleSetAccount} />
       <TabBar tab={tab} onTab={handleSetTab} positionCount={positions.length} checkpointCount={checkpoints.length} />
       <main className="main">
-        {tab === 'dashboard' && <Dashboard trades={trades} spyData={spyData} indexPrices={indexPrices} indexHistory={indexHistory} contributions={contributions} positions={positions} prices={prices} incomeLogs={incomeLogs} onAddIncome={combined ? null : addIncomeLog} />}
+        {tab === 'dashboard' && <Dashboard account={account} trades={trades} spyData={spyData} indexPrices={indexPrices} indexHistory={indexHistory} contributions={contributions} positions={positions} prices={prices} incomeLogs={incomeLogs} onAddIncome={combined ? null : addIncomeLog} />}
         {tab === 'trades'    && <Trades trades={trades} onAdd={combined ? null : addTrade} onDelete={deleteTrade} onUpdate={updateTrade} positions={positions} onClosePosition={closePosition} />}
         {tab === 'positions' && (
           <>
