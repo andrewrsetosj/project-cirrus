@@ -72,7 +72,7 @@ def ensure_tables():
             id        INTEGER PRIMARY KEY,
             symbol    TEXT NOT NULL,
             open_date TEXT NOT NULL,
-            shares    INTEGER NOT NULL,
+            shares    REAL NOT NULL,
             total_buy REAL NOT NULL
         )
     ''')
@@ -172,7 +172,7 @@ def add_trade():
     cur = conn.execute(
         'INSERT INTO trades (symbol, open_date, close_date, shares, total_buy, total_sell, account) VALUES (?,?,?,?,?,?,?)',
         (data['symbol'].upper(), data['open_date'], data['close_date'],
-         int(data['shares']), float(data['total_buy']), float(data['total_sell']), body_account(data))
+         float(data['shares']), float(data['total_buy']), float(data['total_sell']), body_account(data))
     )
     conn.commit()
     row = conn.execute('SELECT * FROM trades WHERE id = ?', (cur.lastrowid,)).fetchone()
@@ -193,7 +193,7 @@ def update_trade(trade_id):
         '''UPDATE trades SET symbol=?, open_date=?, close_date=?, shares=?, total_buy=?, total_sell=?
            WHERE id=?''',
         (data['symbol'].upper(), data['open_date'], data['close_date'],
-         int(data['shares']), float(data['total_buy']), float(data['total_sell']), trade_id)
+         float(data['shares']), float(data['total_buy']), float(data['total_sell']), trade_id)
     )
     conn.commit()
     if cur.rowcount == 0:
@@ -239,7 +239,7 @@ def add_position():
     conn = get_db()
     cur = conn.execute(
         'INSERT INTO open_positions (symbol, open_date, shares, total_buy, account) VALUES (?,?,?,?,?)',
-        (data['symbol'].upper(), data['open_date'], int(data['shares']), float(data['total_buy']), body_account(data))
+        (data['symbol'].upper(), data['open_date'], float(data['shares']), float(data['total_buy']), body_account(data))
     )
     conn.commit()
     row = conn.execute('SELECT * FROM open_positions WHERE id = ?', (cur.lastrowid,)).fetchone()
@@ -259,7 +259,7 @@ def update_position(pos_id):
     cur = conn.execute(
         'UPDATE open_positions SET symbol=?, open_date=?, shares=?, total_buy=? WHERE id=?',
         (data['symbol'].upper(), data['open_date'],
-         int(data['shares']), float(data['total_buy']), pos_id)
+         float(data['shares']), float(data['total_buy']), pos_id)
     )
     conn.commit()
     if cur.rowcount == 0:
@@ -296,14 +296,37 @@ def close_position(pos_id):
         return jsonify({'error': 'Position not found'}), 404
 
     pos = dict(pos)
+
+    # Optional partial close: sell only `shares` of the position, leaving the rest open.
+    sell_shares = pos['shares']
+    if 'shares' in data and data['shares'] != '':
+        try:
+            sell_shares = float(data['shares'])
+        except (TypeError, ValueError):
+            conn.close()
+            return jsonify({'error': 'shares must be a number'}), 400
+        if sell_shares <= 0 or sell_shares > pos['shares']:
+            conn.close()
+            return jsonify({'error': f'shares must be between 1 and {pos["shares"]}'}), 400
+
+    # Cost basis for the sold shares is allocated proportionally (average cost).
+    allocated_buy = pos['total_buy'] * sell_shares / pos['shares']
+
     cur = conn.execute(
         'INSERT INTO trades (symbol, open_date, close_date, shares, total_buy, total_sell, account) VALUES (?,?,?,?,?,?,?)',
         (pos['symbol'], pos['open_date'], data['close_date'],
-         pos['shares'], pos['total_buy'], float(data['total_sell']),
+         sell_shares, allocated_buy, float(data['total_sell']),
          pos.get('account', 'ira'))
     )
     trade_id = cur.lastrowid
-    conn.execute('DELETE FROM open_positions WHERE id = ?', (pos_id,))
+
+    if sell_shares == pos['shares']:
+        conn.execute('DELETE FROM open_positions WHERE id = ?', (pos_id,))
+    else:
+        conn.execute(
+            'UPDATE open_positions SET shares = ?, total_buy = ? WHERE id = ?',
+            (pos['shares'] - sell_shares, pos['total_buy'] - allocated_buy, pos_id)
+        )
     conn.commit()
     trade = conn.execute('SELECT * FROM trades WHERE id = ?', (trade_id,)).fetchone()
     conn.close()
@@ -567,6 +590,36 @@ def add_income():
     row = conn.execute('SELECT * FROM income_log WHERE id=?', (cur.lastrowid,)).fetchone()
     conn.close()
     return jsonify(dict(row)), 201
+
+
+@app.put('/income/<int:income_id>')
+def update_income(income_id):
+    data = request.get_json(silent=True) or {}
+    if not data.get('date') or data.get('amount') is None:
+        return jsonify({'error': 'date and amount are required'}), 400
+    conn = get_db()
+    cur = conn.execute(
+        'UPDATE income_log SET date=?, amount=?, note=? WHERE id=?',
+        (data['date'], float(data['amount']), data.get('note', ''), income_id)
+    )
+    conn.commit()
+    if cur.rowcount == 0:
+        conn.close()
+        return jsonify({'error': 'Not found'}), 404
+    row = conn.execute('SELECT * FROM income_log WHERE id=?', (income_id,)).fetchone()
+    conn.close()
+    return jsonify(dict(row))
+
+
+@app.delete('/income/<int:income_id>')
+def delete_income(income_id):
+    conn = get_db()
+    cur = conn.execute('DELETE FROM income_log WHERE id=?', (income_id,))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        return jsonify({'error': 'Not found'}), 404
+    return '', 204
 
 
 # ── Raw daily spark data (used for S&P overlay) ───────────────────────────────

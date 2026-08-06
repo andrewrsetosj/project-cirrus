@@ -280,30 +280,14 @@ function TopTradesTable({ trades, variant }) {
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
-export default function Dashboard({ account = 'ira', trades, spyData = {}, indexPrices = {}, indexHistory = { VOO: {}, QQQ: {} }, contributions = [], positions = [], prices = {}, incomeLogs = [], onAddIncome }) {
+export default function Dashboard({ account = 'ira', trades, spyData = {}, indexPrices = {}, indexHistory = { VOO: {}, QQQ: {} }, contributions = [], positions = [], prices = {}, incomeLogs = [] }) {
   if (!trades.length) return null
 
   const [modal, setModal] = useState(null)
-  const [incomeForm, setIncomeForm] = useState({ date: new Date().toISOString().slice(0, 10), amount: '', note: '' })
-  const [incomeError, setIncomeError] = useState('')
 
-  // Income entries are cumulative snapshots per account: take each account's
-  // latest and sum, so the combined view adds accounts instead of showing
-  // whichever account logged most recently.
-  const currentIncome = (() => {
-    if (!incomeLogs.length) return null
-    const latest = {}
-    incomeLogs.forEach(e => { latest[e.account ?? 'ira'] = e.amount })
-    return r2(Object.values(latest).reduce((s, v) => s + v, 0))
-  })()
-
-  const handleAddIncome = async e => {
-    e.preventDefault()
-    setIncomeError('')
-    const err = await onAddIncome({ date: incomeForm.date, amount: parseFloat(incomeForm.amount), note: incomeForm.note })
-    if (err) { setIncomeError(err); return }
-    setIncomeForm({ date: new Date().toISOString().slice(0, 10), amount: '', note: '' })
-  }
+  // Each income entry is an individual dividend/interest event; total income
+  // is the sum of every logged entry (managed in the Income tab).
+  const currentIncome = incomeLogs.length ? r2(incomeLogs.reduce((s, e) => s + e.amount, 0)) : null
 
   const winners = trades.filter(t => t.net > 0)
   const losers  = trades.filter(t => t.net < 0)
@@ -512,49 +496,10 @@ export default function Dashboard({ account = 'ira', trades, spyData = {}, index
       content: (
         <>
           <div className="mm-formula">
-            <span className="hl">Income</span> = manually logged dividend &amp; interest income.{'\n'}
-            Update whenever you want to record a new snapshot.
+            <span className="hl">Income</span> = sum of every logged dividend &amp; interest entry.{'\n'}
+            Add, edit, or remove entries in the Income tab.
           </div>
-          {onAddIncome ? <form onSubmit={handleAddIncome} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 16, flexWrap: 'wrap' }}>
-            <div>
-              <div style={{ fontSize: 10, color: 'var(--t3)', marginBottom: 3 }}>Date</div>
-              <input
-                className="form-input"
-                type="date"
-                value={incomeForm.date}
-                onChange={e => setIncomeForm(f => ({ ...f, date: e.target.value }))}
-                required
-                style={{ width: 140 }}
-              />
-            </div>
-            <div>
-              <div style={{ fontSize: 10, color: 'var(--t3)', marginBottom: 3 }}>Total Income $</div>
-              <input
-                className="form-input"
-                type="number"
-                step="0.01"
-                placeholder="e.g. 455.96"
-                value={incomeForm.amount}
-                onChange={e => setIncomeForm(f => ({ ...f, amount: e.target.value }))}
-                required
-                style={{ width: 130 }}
-              />
-            </div>
-            <div style={{ flex: 1, minWidth: 120 }}>
-              <div style={{ fontSize: 10, color: 'var(--t3)', marginBottom: 3 }}>Note (optional)</div>
-              <input
-                className="form-input"
-                type="text"
-                placeholder="e.g. cumulative thru Jul 2026"
-                value={incomeForm.note}
-                onChange={e => setIncomeForm(f => ({ ...f, note: e.target.value }))}
-                style={{ width: '100%' }}
-              />
-            </div>
-            <button type="submit" className="btn btn-primary" style={{ whiteSpace: 'nowrap' }}>Log</button>
-            {incomeError && <span className="form-error" style={{ width: '100%' }}>{incomeError}</span>}
-          </form> : <div className="acct-hint" style={{ marginBottom: 16 }}>switch to IRA or Brokerage to log income</div>}
-          {incomeLogs.length > 0 && (
+          {incomeLogs.length > 0 ? (
             <table className="mm-table">
               <thead><tr><th>Date</th><th className="r">Amount</th><th>Note</th></tr></thead>
               <tbody>
@@ -567,9 +512,8 @@ export default function Dashboard({ account = 'ira', trades, spyData = {}, index
                 ))}
               </tbody>
             </table>
-          )}
-          {incomeLogs.length === 0 && (
-            <div style={{ color: 'var(--t3)', fontSize: 12 }}>No entries yet. Log your first income snapshot above.</div>
+          ) : (
+            <div style={{ color: 'var(--t3)', fontSize: 12 }}>No entries yet. Log your first entry in the Income tab.</div>
           )}
         </>
       ),

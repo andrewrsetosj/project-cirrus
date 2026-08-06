@@ -55,7 +55,7 @@ function AddPositionForm({ open, onAdd, onClose }) {
         </div>
         <div className="form-group">
           <label className="form-label">Shares</label>
-          <input className="form-input" type="number" min="1" step="1" placeholder="10" value={form.shares} onChange={e => set('shares', e.target.value)} required />
+          <input className="form-input" type="number" min="0.000001" step="any" placeholder="10" value={form.shares} onChange={e => set('shares', e.target.value)} required />
         </div>
         <div className="form-group">
           <label className="form-label">Total Cost $</label>
@@ -77,7 +77,7 @@ function AddPositionForm({ open, onAdd, onClose }) {
 const EDIT_POS_FIELDS = [
   { key: 'symbol',    label: 'Symbol',      type: 'text',   width: 80 },
   { key: 'open_date', label: 'Open Date',   type: 'date',   width: 138 },
-  { key: 'shares',    label: 'Shares',      type: 'number', width: 76,  extra: { min: 1, step: 1 } },
+  { key: 'shares',    label: 'Shares',      type: 'number', width: 76,  extra: { min: 0.000001, step: 'any' } },
   { key: 'total_buy', label: 'Total Cost $', type: 'number', width: 120, extra: { min: 0.01, step: 0.01 } },
 ]
 
@@ -139,13 +139,22 @@ function EditPositionRow({ position, colSpan, onSave, onCancel }) {
 
 function CloseFormRow({ position, colSpan, onClose, onCancel }) {
   const [closeDate, setCloseDate] = useState(todayStr())
+  const [shares, setShares]       = useState(String(position.shares))
   const [totalSell, setTotalSell] = useState('')
   const [error, setError]         = useState('')
+
+  const sellShares = parseFloat(shares) || 0
+  const isPartial   = sellShares > 0 && sellShares < position.shares
+  const remaining   = Math.round((position.shares - sellShares) * 1e6) / 1e6
 
   const handleSubmit = async e => {
     e.preventDefault()
     setError('')
-    const err = await onClose(position.id, { close_date: closeDate, total_sell: totalSell })
+    if (sellShares <= 0 || sellShares > position.shares) {
+      setError(`Shares must be between 1 and ${position.shares}`)
+      return
+    }
+    const err = await onClose(position.id, { close_date: closeDate, total_sell: totalSell, shares: sellShares })
     if (err) setError(err)
   }
 
@@ -159,11 +168,26 @@ function CloseFormRow({ position, colSpan, onClose, onCancel }) {
             <DatePicker value={closeDate} onChange={setCloseDate} required />
           </div>
           <div className="close-form-field">
+            <label>Shares to Sell</label>
+            <input
+              type="number" step="any" min="0.000001" max={position.shares} className="form-input"
+              placeholder={String(position.shares)} value={shares}
+              onChange={e => setShares(e.target.value)} required
+            />
+          </div>
+          <div className="close-form-field">
             <label>Total Sell $</label>
             <input type="number" step="0.01" min="0.01" className="form-input" placeholder="0.00" value={totalSell} onChange={e => setTotalSell(e.target.value)} required />
           </div>
+          {isPartial && (
+            <span style={{ fontSize: 11, color: 'var(--t2)' }}>
+              {remaining} sh will remain open
+            </span>
+          )}
           {error && <span className="form-error">{error}</span>}
-          <button type="submit" className="btn btn-primary" style={{ padding: '6px 14px', fontSize: 11 }}>Confirm Close</button>
+          <button type="submit" className="btn btn-primary" style={{ padding: '6px 14px', fontSize: 11 }}>
+            {isPartial ? 'Confirm Partial Close' : 'Confirm Close'}
+          </button>
           <button type="button" className="btn btn-ghost" style={{ padding: '6px 12px', fontSize: 11 }} onClick={onCancel}>Cancel</button>
         </form>
       </td>

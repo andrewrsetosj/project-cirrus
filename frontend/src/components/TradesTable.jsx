@@ -25,7 +25,7 @@ const EDIT_FIELDS = [
   { key: 'symbol',     label: 'Symbol',      type: 'text',   width: 80 },
   { key: 'open_date',  label: 'Open Date',   type: 'date',   width: 138 },
   { key: 'close_date', label: 'Close Date',  type: 'date',   width: 138 },
-  { key: 'shares',     label: 'Shares',      type: 'number', width: 76,  extra: { min: 1, step: 1 } },
+  { key: 'shares',     label: 'Shares',      type: 'number', width: 76,  extra: { min: 0.000001, step: 'any' } },
   { key: 'total_buy',  label: 'Total Buy $', type: 'number', width: 110, extra: { min: 0.01, step: 0.01 } },
   { key: 'total_sell', label: 'Total Sell $',type: 'number', width: 110, extra: { min: 0.01, step: 0.01 } },
 ]

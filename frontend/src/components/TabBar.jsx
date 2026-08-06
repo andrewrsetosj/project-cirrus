@@ -3,6 +3,7 @@ const TABS = [
   { key: 'trades',        label: 'Trades',        icon: '▤', accent: 'var(--violet)' },
   { key: 'positions',     label: 'Positions',     icon: '◉', accent: 'var(--green)' },
   { key: 'contributions', label: 'Contributions', icon: '⊕', accent: 'var(--amber)' },
+  { key: 'income',        label: 'Income',        icon: '◆', accent: 'var(--green)' },
   { key: 'research',      label: 'Research',      icon: '◈', accent: 'var(--mag)' },
   { key: 'checkpoint',    label: 'Checkpoint',    icon: '⊙', accent: 'var(--cyan)' },
 ]

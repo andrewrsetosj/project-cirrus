@@ -6,7 +6,7 @@ const EMPTY = { symbol: '', open_date: '', close_date: '', shares: '', total_buy
 const FIELDS = [
   { key: 'open_date',  label: 'Open Date',   type: 'date',   placeholder: '' },
   { key: 'close_date', label: 'Close Date',  type: 'date',   placeholder: '' },
-  { key: 'shares',     label: 'Shares',      type: 'number', placeholder: '10',      extra: { min: 1, step: 1 } },
+  { key: 'shares',     label: 'Shares',      type: 'number', placeholder: '10',      extra: { min: 0.000001, step: 'any' } },
   { key: 'total_buy',  label: 'Total Buy $', type: 'number', placeholder: '1500.00', extra: { min: 0.01, step: 0.01 } },
   { key: 'total_sell', label: 'Total Sell $',type: 'number', placeholder: '1750.00', extra: { min: 0.01, step: 0.01 } },
 ]

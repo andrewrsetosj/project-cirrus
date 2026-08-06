@@ -16,7 +16,7 @@ function matchSells(sells, positions) {
   const used = new Set()
   return sells.map(sell => {
     const candidates = (posMap[sell.ticker] || []).filter(p => !used.has(p.id))
-    const exact = candidates.find(p => p.shares === Math.round(sell.quantity))
+    const exact = candidates.find(p => Math.abs(p.shares - sell.quantity) < 0.0005)
     const match = exact || candidates[0] || null
     if (match) used.add(match.id)
     return { ...sell, matchedPosition: match }
@@ -134,7 +134,7 @@ function SyncPanel({ positions, onClosePosition, onDone }) {
                     </td>
                     <td className="cell-sym">{r.ticker}</td>
                     <td className="cell-date">{r.date}</td>
-                    <td className="cell-r">{Math.round(r.quantity)}</td>
+                    <td className="cell-r">{r.quantity}</td>
                     <td className="cell-r cell-gain">{fmtDollar(r.amount)}</td>
                     <td style={{ fontSize: 11, color: 'var(--t2)' }}>#{r.matchedPosition.id} · {r.matchedPosition.shares} sh</td>
                     <td className="cell-date">{r.matchedPosition.open_date}</td>
@@ -178,7 +178,7 @@ function SyncPanel({ positions, onClosePosition, onDone }) {
                   <tr key={r.id} style={{ opacity: 0.45 }}>
                     <td className="cell-sym">{r.ticker}</td>
                     <td className="cell-date">{r.date}</td>
-                    <td className="cell-r">{Math.round(r.quantity)}</td>
+                    <td className="cell-r">{r.quantity}</td>
                     <td className="cell-r">{fmtDollar(r.amount)}</td>
                   </tr>
                 ))}

@@ -6,6 +6,7 @@ import Dashboard from './components/Dashboard'
 import Trades from './components/Trades'
 import Positions from './components/Positions'
 import Contributions from './components/Contributions'
+import Income from './components/Income'
 import FidelityPositions from './components/FidelityPositions'
 import Research from './components/Research'
 import CheckpointTab from './components/Checkpoint'
@@ -22,7 +23,7 @@ export default function App() {
   const [indexHistory,   setIndexHistory]   = useState({ VOO: {}, QQQ: {} })
   const [allContributions, setAllContributions] = useState([])
   const [allIncomeLogs,    setAllIncomeLogs]    = useState([])
-  const validTabs = ['dashboard', 'trades', 'positions', 'contributions', 'research', 'checkpoint']
+  const validTabs = ['dashboard', 'trades', 'positions', 'contributions', 'income', 'research', 'checkpoint']
   const [tab, setTab] = useState(() => {
     const hash = window.location.hash.slice(1)
     return validTabs.includes(hash) ? hash : 'dashboard'
@@ -188,6 +189,19 @@ export default function App() {
     return (await res.json()).error || 'Failed to add income entry.'
   }
 
+  const updateIncomeLog = async (id, data) => {
+    const res = await fetch(`/income/${id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+    })
+    if (res.ok) { await fetchIncomeLogs(); return null }
+    return (await res.json()).error || 'Failed to update income entry.'
+  }
+
+  const deleteIncomeLog = async (id) => {
+    await fetch(`/income/${id}`, { method: 'DELETE' })
+    fetchIncomeLogs()
+  }
+
   const addContribution = async (data) => {
     const res = await fetch('/contributions', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...data, account }),
@@ -255,7 +269,7 @@ export default function App() {
       <Header account={account} onAccount={handleSetAccount} />
       <TabBar tab={tab} onTab={handleSetTab} positionCount={positions.length} checkpointCount={checkpoints.length} />
       <main className="main">
-        {tab === 'dashboard' && <Dashboard account={account} trades={trades} spyData={spyData} indexPrices={indexPrices} indexHistory={indexHistory} contributions={contributions} positions={positions} prices={prices} incomeLogs={incomeLogs} onAddIncome={combined ? null : addIncomeLog} />}
+        {tab === 'dashboard' && <Dashboard account={account} trades={trades} spyData={spyData} indexPrices={indexPrices} indexHistory={indexHistory} contributions={contributions} positions={positions} prices={prices} incomeLogs={incomeLogs} />}
         {tab === 'trades'    && <Trades trades={trades} onAdd={combined ? null : addTrade} onDelete={deleteTrade} onUpdate={updateTrade} positions={positions} onClosePosition={closePosition} />}
         {tab === 'positions' && (
           <>
@@ -267,6 +281,7 @@ export default function App() {
           </>
         )}
         {tab === 'contributions' && <Contributions contributions={contributions} onAdd={combined ? null : addContribution} onDelete={deleteContribution} />}
+        {tab === 'income' && <Income incomeLogs={incomeLogs} onAdd={combined ? null : addIncomeLog} onUpdate={updateIncomeLog} onDelete={deleteIncomeLog} />}
         <div style={{ display: tab === 'research' ? 'block' : 'none' }}>
           <Research checkpoints={checkpoints} onCheckpoint={addCheckpoint} />
         </div>

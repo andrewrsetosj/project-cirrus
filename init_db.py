@@ -13,7 +13,7 @@ def init():
             symbol     TEXT NOT NULL,
             open_date  TEXT NOT NULL,
             close_date TEXT NOT NULL,
-            shares     INTEGER NOT NULL,
+            shares     REAL NOT NULL,
             total_buy  REAL NOT NULL,
             total_sell REAL NOT NULL
         )

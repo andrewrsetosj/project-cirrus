@@ -66,11 +66,8 @@ def build(path, account):
             income.append({'date': date, 'amount': r2(amount), 'note': 'E*TRADE interest'})
         elif atype in ('Bought', 'Sold'):
             qty = float(row['Quantity #'])
-            if qty != int(qty):
-                sys.exit(f'Fractional share quantity {qty} on {date} {row["Symbol"]} — '
-                         'trades.shares is an integer column; handle this row manually.')
             rec = {'symbol': row['Symbol'].strip().upper(), 'date': date,
-                   'shares': abs(int(qty)), 'amount': abs(amount)}
+                   'shares': abs(qty), 'amount': abs(amount)}
             (buys if atype == 'Bought' else sells).append(rec)
         # anything else (fees, dividends-reinvested, etc.) is ignored; extend as needed
 
@@ -87,7 +84,7 @@ def build(path, account):
             lots[sym].append({'date': ev['date'], 'shares': ev['shares'], 'cost': ev['amount']})
             continue
         remaining, proceeds_per_share = ev['shares'], ev['amount'] / ev['shares']
-        while remaining > 0:
+        while remaining > 1e-6:
             if not lots[sym]:
                 sys.exit(f'Sell of {remaining} {sym} on {ev["date"]} has no matching buy lot — '
                          'the export window may not cover the original purchase.')
@@ -100,7 +97,7 @@ def build(path, account):
             })
             lot['shares'] -= take
             lot['cost']   -= cost
-            if lot['shares'] == 0:
+            if lot['shares'] < 1e-6:
                 lots[sym].popleft()
             remaining -= take
 
