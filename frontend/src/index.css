@@ -157,6 +157,36 @@ body {
 .acct-btn.active:not(:first-child):not(:last-child) { background: var(--violet); }
 .acct-btn.active:last-child { background: var(--t2); }
 
+/* ── Benchmark buy-timing toggle ─────────────────────────────────────────── */
+.bench-toggle {
+  display: inline-flex;
+  border: 1px solid var(--bdr-mid);
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255,255,255,0.03);
+}
+
+.bench-toggle button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: var(--sans);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--t3);
+  padding: 5px 12px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.bench-toggle button:hover { color: var(--t1); }
+
+.bench-toggle button.active {
+  background: var(--bdr-mid);
+  color: var(--t1);
+}
+
 /* hint shown where an add-form would be, in the ALL (combined) view */
 .acct-hint {
   font-size: 11px;

@@ -10,6 +10,7 @@ import time as _time
 from datetime import datetime as _dt, timezone as _tz
 from concurrent.futures import ThreadPoolExecutor
 import anthropic as _anthropic
+import analytics
 import plaid
 from plaid.api import plaid_api
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
@@ -23,6 +24,28 @@ from plaid.model.products import Products
 from plaid.model.country_code import CountryCode
 
 _claude = _anthropic.Anthropic(api_key=os.environ.get('ANTHROPIC_API_KEY'))
+
+# Share counts are stored as REAL, so arithmetic like 13.972 - 13 leaves binary
+# float noise (0.9719999999999995). Brokerages quote fractional shares to at most
+# 6 decimals, so round to 8 and treat anything under SHARE_EPS as zero.
+SHARE_DP = 8
+SHARE_EPS = 1e-8
+
+
+def parse_shares(value):
+    """Parse a user-supplied share count, rounded free of float noise."""
+    return round(float(value), SHARE_DP)
+
+
+# Ledger dollar amounts are accumulated and differenced, so they get snapped to
+# whole cents on the way in. Market prices are multiplied rather than summed and
+# keep their full precision.
+MONEY_DP = 2
+
+
+def parse_money(value):
+    """Parse a user-supplied dollar amount, snapped to whole cents."""
+    return round(float(value), MONEY_DP)
 
 _plaid_cfg = plaid.Configuration(
     host=plaid.Environment.Production,
@@ -67,6 +90,17 @@ def get_db():
 
 def ensure_tables():
     conn = get_db()
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS trades (
+            id         INTEGER PRIMARY KEY,
+            symbol     TEXT NOT NULL,
+            open_date  TEXT NOT NULL,
+            close_date TEXT NOT NULL,
+            shares     REAL NOT NULL,
+            total_buy  REAL NOT NULL,
+            total_sell REAL NOT NULL
+        )
+    ''')
     conn.execute('''
         CREATE TABLE IF NOT EXISTS open_positions (
             id        INTEGER PRIMARY KEY,
@@ -121,6 +155,19 @@ def ensure_tables():
         cols = [r[1] for r in conn.execute(f'PRAGMA table_info({table})')]
         if cols and 'account' not in cols:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN account TEXT NOT NULL DEFAULT 'ira'")
+    # adj_close = dividend-adjusted close, used for total-return benchmarks. Rows
+    # cached before this column existed have NULL and get re-fetched on demand.
+    mc_cols = [r[1] for r in conn.execute('PRAGMA table_info(market_cache)')]
+    if 'adj_close' not in mc_cols:
+        conn.execute('ALTER TABLE market_cache ADD COLUMN adj_close REAL')
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS market_splits (
+            symbol TEXT NOT NULL,
+            date   TEXT NOT NULL,
+            ratio  REAL NOT NULL,
+            PRIMARY KEY (symbol, date)
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -172,7 +219,7 @@ def add_trade():
     cur = conn.execute(
         'INSERT INTO trades (symbol, open_date, close_date, shares, total_buy, total_sell, account) VALUES (?,?,?,?,?,?,?)',
         (data['symbol'].upper(), data['open_date'], data['close_date'],
-         float(data['shares']), float(data['total_buy']), float(data['total_sell']), body_account(data))
+         parse_shares(data['shares']), parse_money(data['total_buy']), parse_money(data['total_sell']), body_account(data))
     )
     conn.commit()
     row = conn.execute('SELECT * FROM trades WHERE id = ?', (cur.lastrowid,)).fetchone()
@@ -193,7 +240,7 @@ def update_trade(trade_id):
         '''UPDATE trades SET symbol=?, open_date=?, close_date=?, shares=?, total_buy=?, total_sell=?
            WHERE id=?''',
         (data['symbol'].upper(), data['open_date'], data['close_date'],
-         float(data['shares']), float(data['total_buy']), float(data['total_sell']), trade_id)
+         parse_shares(data['shares']), parse_money(data['total_buy']), parse_money(data['total_sell']), trade_id)
     )
     conn.commit()
     if cur.rowcount == 0:
@@ -239,7 +286,7 @@ def add_position():
     conn = get_db()
     cur = conn.execute(
         'INSERT INTO open_positions (symbol, open_date, shares, total_buy, account) VALUES (?,?,?,?,?)',
-        (data['symbol'].upper(), data['open_date'], float(data['shares']), float(data['total_buy']), body_account(data))
+        (data['symbol'].upper(), data['open_date'], parse_shares(data['shares']), parse_money(data['total_buy']), body_account(data))
     )
     conn.commit()
     row = conn.execute('SELECT * FROM open_positions WHERE id = ?', (cur.lastrowid,)).fetchone()
@@ -259,7 +306,7 @@ def update_position(pos_id):
     cur = conn.execute(
         'UPDATE open_positions SET symbol=?, open_date=?, shares=?, total_buy=? WHERE id=?',
         (data['symbol'].upper(), data['open_date'],
-         float(data['shares']), float(data['total_buy']), pos_id)
+         parse_shares(data['shares']), parse_money(data['total_buy']), pos_id)
     )
     conn.commit()
     if cur.rowcount == 0:
@@ -301,31 +348,38 @@ def close_position(pos_id):
     sell_shares = pos['shares']
     if 'shares' in data and data['shares'] != '':
         try:
-            sell_shares = float(data['shares'])
+            sell_shares = parse_shares(data['shares'])
         except (TypeError, ValueError):
             conn.close()
             return jsonify({'error': 'shares must be a number'}), 400
-        if sell_shares <= 0 or sell_shares > pos['shares']:
+        # Compare with tolerance: share counts are floats, so a remainder stored
+        # as 0.9719999999999995 must still accept a sell of 0.972.
+        if sell_shares <= 0 or sell_shares - pos['shares'] > SHARE_EPS:
             conn.close()
             return jsonify({'error': f'shares must be between 1 and {pos["shares"]}'}), 400
+        sell_shares = min(sell_shares, pos['shares'])
 
-    # Cost basis for the sold shares is allocated proportionally (average cost).
-    allocated_buy = pos['total_buy'] * sell_shares / pos['shares']
+    # Cost basis for the sold shares is allocated proportionally (average cost),
+    # snapped to whole cents. The remainder left on the position is computed as
+    # total - allocated rather than re-derived, so the two always sum back to the
+    # original basis and repeated partial sells cannot drift.
+    allocated_buy = round(pos['total_buy'] * sell_shares / pos['shares'], MONEY_DP)
 
     cur = conn.execute(
         'INSERT INTO trades (symbol, open_date, close_date, shares, total_buy, total_sell, account) VALUES (?,?,?,?,?,?,?)',
         (pos['symbol'], pos['open_date'], data['close_date'],
-         sell_shares, allocated_buy, float(data['total_sell']),
+         sell_shares, allocated_buy, parse_money(data['total_sell']),
          pos.get('account', 'ira'))
     )
     trade_id = cur.lastrowid
 
-    if sell_shares == pos['shares']:
+    remaining_shares = round(pos['shares'] - sell_shares, SHARE_DP)
+    if remaining_shares <= SHARE_EPS:
         conn.execute('DELETE FROM open_positions WHERE id = ?', (pos_id,))
     else:
         conn.execute(
             'UPDATE open_positions SET shares = ?, total_buy = ? WHERE id = ?',
-            (pos['shares'] - sell_shares, pos['total_buy'] - allocated_buy, pos_id)
+            (remaining_shares, round(pos['total_buy'] - allocated_buy, MONEY_DP), pos_id)
         )
     conn.commit()
     trade = conn.execute('SELECT * FROM trades WHERE id = ?', (trade_id,)).fetchone()
@@ -544,7 +598,7 @@ def add_contribution():
     conn = get_db()
     cur = conn.execute(
         'INSERT INTO contributions (date, amount, note, account) VALUES (?,?,?,?)',
-        (data['date'], float(data['amount']), data.get('note', ''), body_account(data))
+        (data['date'], parse_money(data['amount']), data.get('note', ''), body_account(data))
     )
     conn.commit()
     row = conn.execute('SELECT * FROM contributions WHERE id=?', (cur.lastrowid,)).fetchone()
@@ -584,7 +638,7 @@ def add_income():
     conn = get_db()
     cur = conn.execute(
         'INSERT INTO income_log (date, amount, note, account) VALUES (?,?,?,?)',
-        (data['date'], float(data['amount']), data.get('note', ''), body_account(data))
+        (data['date'], parse_money(data['amount']), data.get('note', ''), body_account(data))
     )
     conn.commit()
     row = conn.execute('SELECT * FROM income_log WHERE id=?', (cur.lastrowid,)).fetchone()
@@ -600,7 +654,7 @@ def update_income(income_id):
     conn = get_db()
     cur = conn.execute(
         'UPDATE income_log SET date=?, amount=?, note=? WHERE id=?',
-        (data['date'], float(data['amount']), data.get('note', ''), income_id)
+        (data['date'], parse_money(data['amount']), data.get('note', ''), income_id)
     )
     conn.commit()
     if cur.rowcount == 0:
@@ -634,37 +688,127 @@ _market_lock       = threading.Lock()
 
 
 def _yahoo_closes(sym, period1, period2):
+    """Returns (closes, splits): {date: (close, adj_close)} and {date: ratio}.
+
+    Both close series are split-adjusted by Yahoo, so the splits come back too —
+    holdings recorded in as-traded shares need them undone before valuation.
+    """
     url = (f'https://query1.finance.yahoo.com/v8/finance/chart/{sym}'
-           f'?period1={period1}&period2={period2}&interval=1d')
+           f'?period1={period1}&period2={period2}&interval=1d&events=split')
     req = urllib.request.Request(url, headers=_HEADERS)
     with urllib.request.urlopen(req, timeout=15, context=_SSL) as r:
         data = _json.loads(r.read())
     result     = (data.get('chart', {}).get('result') or [{}])[0]
     timestamps = result.get('timestamp') or []
-    closes_raw = (result.get('indicators', {}).get('quote') or [{}])[0].get('close') or []
+    indicators = result.get('indicators', {})
+    closes_raw = (indicators.get('quote') or [{}])[0].get('close') or []
+    # adjclose is the dividend-adjusted series; absent on some symbols/ranges.
+    adj_raw    = (indicators.get('adjclose') or [{}])[0].get('adjclose') or []
     out = {}
-    for ts, c in zip(timestamps, closes_raw):
-        if c is not None:
-            out[_dt.fromtimestamp(ts, tz=_tz.utc).strftime('%Y-%m-%d')] = round(float(c), 2)
-    return out
+    for i, (ts, c) in enumerate(zip(timestamps, closes_raw)):
+        if c is None:
+            continue
+        a = adj_raw[i] if i < len(adj_raw) and adj_raw[i] is not None else None
+        out[_dt.fromtimestamp(ts, tz=_tz.utc).strftime('%Y-%m-%d')] = (
+            round(float(c), 2), round(float(a), 4) if a is not None else None)
+
+    splits = {}
+    for ev in ((result.get('events') or {}).get('splits') or {}).values():
+        try:
+            num, den = float(ev['numerator']), float(ev['denominator'])
+            if den:
+                day = _dt.fromtimestamp(ev['date'], tz=_tz.utc).strftime('%Y-%m-%d')
+                splits[day] = num / den
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out, splits
 
 
 def _store_closes(sym, closes):
+    """closes maps date -> (close, adj_close). adj_close may be None."""
     if not closes:
         return
     conn = get_db()
     conn.executemany(
-        'INSERT OR REPLACE INTO market_cache (symbol, date, close) VALUES (?, ?, ?)',
-        [(sym, d, c) for d, c in closes.items()])
+        'INSERT OR REPLACE INTO market_cache (symbol, date, close, adj_close) VALUES (?, ?, ?, ?)',
+        [(sym, d, v[0], v[1]) for d, v in closes.items()])
     conn.commit()
     conn.close()
+
+
+def _store_splits(sym, splits):
+    if not splits:
+        return
+    conn = get_db()
+    conn.executemany(
+        'INSERT OR REPLACE INTO market_splits (symbol, date, ratio) VALUES (?, ?, ?)',
+        [(sym, d, r) for d, r in splits.items()])
+    conn.commit()
+    conn.close()
+
+
+def _load_splits(symbols):
+    conn = get_db()
+    out = {s: {} for s in symbols}
+    for sym in symbols:
+        for r in conn.execute('SELECT date, ratio FROM market_splits WHERE symbol = ?', (sym,)):
+            out[sym][r['date']] = r['ratio']
+    conn.close()
+    return out
+
+
+def _splits_unchecked(symbols):
+    """Symbols never scanned for splits.
+
+    An empty market_splits result is ambiguous — no splits, or never looked — so
+    a kv marker records that the lookup happened. Symbols cached before splits
+    were tracked get backfilled on first use rather than needing a migration.
+    """
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT key FROM kv WHERE key LIKE 'splits_checked:%'").fetchall()
+    conn.close()
+    seen = {r['key'].split(':', 1)[1] for r in rows}
+    return [s for s in symbols if s not in seen]
+
+
+def _mark_splits_checked(symbols):
+    if not symbols:
+        return
+    conn = get_db()
+    conn.executemany("INSERT OR REPLACE INTO kv (key, value) VALUES (?, '1')",
+                     [(f'splits_checked:{s}',) for s in symbols])
+    conn.commit()
+    conn.close()
+
+
+def _backfill_splits(symbols, start):
+    """Fetch split events for symbols whose price cache predates split tracking."""
+    todo = _splits_unchecked(symbols)
+    if not todo:
+        return
+    period1 = int(_dt.strptime(start, '%Y-%m-%d').replace(tzinfo=_tz.utc).timestamp())
+    period2 = int(_dt.now(_tz.utc).timestamp())
+
+    def pull(sym):
+        try:
+            _, splits = _yahoo_closes(sym, period1, period2)
+            _store_splits(sym, splits)
+            return sym
+        except Exception:
+            return None      # leave unmarked so it retries next time
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        _mark_splits_checked([s for s in pool.map(pull, todo) if s])
 
 
 def _refresh_market_cache(sym, from_date):
     try:
         period1 = int(_dt.strptime(from_date, '%Y-%m-%d').replace(tzinfo=_tz.utc).timestamp())
         period2 = int(_dt.now(_tz.utc).timestamp())
-        _store_closes(sym, _yahoo_closes(sym, period1, period2))
+        closes, splits = _yahoo_closes(sym, period1, period2)
+        _store_closes(sym, closes)
+        _store_splits(sym, splits)
         with _market_lock:
             _market_refreshed[sym] = _time.monotonic()
     except Exception:
@@ -679,19 +823,25 @@ def market_sparkdata():
     sym    = request.args.get('symbol', 'SPY').upper()
     start  = request.args.get('start')   # optional YYYY-MM-DD
     range_ = request.args.get('range', '2y')
+    # adjusted=1 serves the dividend-adjusted series (total return) instead of
+    # raw closes. Benchmarks want this; holdings valuation wants raw closes.
+    adjusted = request.args.get('adjusted') in ('1', 'true', 'yes')
     try:
         if start:
             conn = get_db()
             rows = conn.execute(
-                'SELECT date, close FROM market_cache WHERE symbol = ? AND date >= ? ORDER BY date',
+                'SELECT date, close, adj_close FROM market_cache WHERE symbol = ? AND date >= ? ORDER BY date',
                 (sym, start)).fetchall()
             conn.close()
-            cached = {r['date']: r['close'] for r in rows}
+            cached = {r['date']: (r['adj_close'] if adjusted else r['close']) for r in rows}
             # usable if the first cached close is within a week of the requested
             # start (the first trading day can trail a weekend/holiday start)
             first  = min(cached) if cached else None
             covers = first is not None and (
                 _dt.strptime(first, '%Y-%m-%d') - _dt.strptime(start, '%Y-%m-%d')).days <= 7
+            # rows cached before adj_close existed hold NULL there; force a re-fetch
+            if adjusted and any(v is None for v in cached.values()):
+                covers = False
             if covers:
                 with _market_lock:
                     stale = _time.monotonic() - _market_refreshed.get(sym, float('-inf')) > _MARKET_TTL
@@ -706,11 +856,14 @@ def market_sparkdata():
             # cold cache: fetch the full window synchronously, then serve from SQLite next time
             period1 = int(_dt.strptime(start, '%Y-%m-%d').replace(tzinfo=_tz.utc).timestamp())
             period2 = int(_dt.now(_tz.utc).timestamp())
-            out = _yahoo_closes(sym, period1, period2)
-            _store_closes(sym, out)
+            fetched, splits = _yahoo_closes(sym, period1, period2)
+            _store_closes(sym, fetched)
+            _store_splits(sym, splits)
             with _market_lock:
                 _market_refreshed[sym] = _time.monotonic()
-            return jsonify(out)
+            # fall back to the raw close when Yahoo omits an adjusted value
+            return jsonify({d: ((v[1] if v[1] is not None else v[0]) if adjusted else v[0])
+                            for d, v in fetched.items()})
         else:
             url = (f'https://query1.finance.yahoo.com/v7/finance/spark?symbols={sym}'
                    f'&range={range_}&interval=1d')
@@ -730,6 +883,146 @@ def market_sparkdata():
         return jsonify(out)
     except Exception:
         return jsonify({}), 502
+
+
+def closes_for(symbols, start, adjusted=False, as_traded=False):
+    """{symbol: {date: close}} from `start`, served from cache and backfilled.
+
+    A symbol is re-fetched when the cache starts more than a week after `start`,
+    or when adjusted closes are wanted and the cached rows predate that column.
+
+    `as_traded` undoes Yahoo's retroactive split adjustment, putting prices back
+    in the share terms the trades were recorded in. Use it for valuing holdings;
+    leave it off for benchmarks, where the series only needs internal consistency.
+    """
+    conn = get_db()
+    cached = {}
+    for sym in symbols:
+        rows = conn.execute(
+            'SELECT date, close, adj_close FROM market_cache WHERE symbol = ? AND date >= ? ORDER BY date',
+            (sym, start)).fetchall()
+        cached[sym] = {r['date']: (r['adj_close'] if adjusted else r['close']) for r in rows}
+    conn.close()
+
+    def covered(sym):
+        days = cached[sym]
+        if not days or any(v is None for v in days.values()):
+            return False
+        gap = (_dt.strptime(min(days), '%Y-%m-%d') - _dt.strptime(start, '%Y-%m-%d')).days
+        return gap <= 7
+
+    stale = [s for s in symbols if not covered(s)]
+    if stale:
+        period1 = int(_dt.strptime(start, '%Y-%m-%d').replace(tzinfo=_tz.utc).timestamp())
+        period2 = int(_dt.now(_tz.utc).timestamp())
+
+        def pull(sym):
+            try:
+                fetched, splits = _yahoo_closes(sym, period1, period2)
+                _store_closes(sym, fetched)
+                _store_splits(sym, splits)
+                return sym, {d: ((v[1] if v[1] is not None else v[0]) if adjusted else v[0])
+                             for d, v in fetched.items()}
+            except Exception:
+                # keep whatever was cached; a missing symbol degrades one holding,
+                # it should not fail the whole series
+                return sym, {d: v for d, v in cached.get(sym, {}).items() if v is not None}
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for sym, days in pool.map(pull, stale):
+                cached[sym] = days
+
+    if as_traded:
+        _backfill_splits(symbols, start)
+        splits = _load_splits(symbols)
+        cached = {sym: analytics.unadjust_splits(hist, splits.get(sym) or {})
+                  for sym, hist in cached.items()}
+
+    return cached
+
+
+@app.get('/market/dailycloses')
+def market_dailycloses():
+    """Daily raw closes for several symbols at once, for marking holdings to market."""
+    symbols = [s.strip().upper() for s in (request.args.get('symbols') or '').split(',') if s.strip()]
+    start   = request.args.get('start')
+    if not symbols or not start:
+        return jsonify({})
+    return jsonify(closes_for(symbols, start, as_traded=True))
+
+
+BENCHMARKS = ('SPY', 'VOO', 'QQQ')
+
+
+@app.get('/analytics/timeseries')
+def analytics_timeseries():
+    """Daily portfolio value, benchmark equivalents, and risk statistics.
+
+    Query: account (ira|brokerage|all), clamped=0|1, rf=<annual risk-free rate>.
+    """
+    acct    = account_filter()
+    clamped = request.args.get('clamped') in ('1', 'true', 'yes')
+    try:
+        risk_free = float(request.args.get('rf', 0) or 0)
+    except ValueError:
+        risk_free = 0.0
+
+    conn = get_db()
+    def rows(table, date_col):
+        sql = f'SELECT * FROM {table}' + (' WHERE account = ?' if acct else '')
+        return [dict(r) for r in (conn.execute(sql, (acct,)) if acct else conn.execute(sql))]
+
+    trades        = rows('trades', 'close_date')
+    positions     = rows('open_positions', 'open_date')
+    contributions = rows('contributions', 'date')
+    income        = rows('income_log', 'date')
+    conn.close()
+
+    if not contributions and not trades and not positions:
+        return jsonify({'series': [], 'benchmarks': {}, 'stats': {}, 'start': None})
+
+    invest_dates = [x['open_date'] for x in trades + positions]
+    first_invest = min(invest_dates) if invest_dates else None
+    candidates   = [c['date'] for c in contributions] + invest_dates
+    start        = min(candidates)
+
+    symbols = sorted({x['symbol'] for x in trades + positions})
+    holdings_px  = closes_for(symbols, start, as_traded=True) if symbols else {}
+    benchmark_px = closes_for(BENCHMARKS, start, adjusted=True)
+
+    # SPY's dates are the market calendar; fall back to whatever prices we have.
+    days = sorted(benchmark_px.get('SPY') or
+                  {d for hist in holdings_px.values() for d in hist})
+    days = [d for d in days if d >= start]
+    if not days:
+        return jsonify({'series': [], 'benchmarks': {}, 'stats': {}, 'start': start})
+
+    series = analytics.build_daily_series(
+        days, positions, trades, contributions, income, holdings_px)
+
+    benchmarks = {}
+    for sym in BENCHMARKS:
+        hist = benchmark_px.get(sym) or {}
+        if hist:
+            benchmarks[sym] = analytics.simulate_fund(
+                days, contributions, hist, first_invest, clamped)
+
+    spy_series  = benchmarks.get('SPY') or []
+    spy_returns = analytics.daily_returns(spy_series) if spy_series else None
+
+    stats = analytics.performance_stats(series, spy_returns, risk_free)
+    bench_stats = {sym: analytics.performance_stats(rs, spy_returns, risk_free)
+                   for sym, rs in benchmarks.items() if rs}
+
+    return jsonify({
+        'start': start,
+        'first_invest_date': first_invest,
+        'clamped': clamped,
+        'series': series,
+        'benchmarks': benchmarks,
+        'stats': stats,
+        'benchmark_stats': bench_stats,
+    })
 
 
 # ── Plaid ─────────────────────────────────────────────────────────────────────

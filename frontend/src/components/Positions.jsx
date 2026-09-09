@@ -143,15 +143,19 @@ function CloseFormRow({ position, colSpan, onClose, onCancel }) {
   const [totalSell, setTotalSell] = useState('')
   const [error, setError]         = useState('')
 
-  const sellShares = parseFloat(shares) || 0
-  const isPartial   = sellShares > 0 && sellShares < position.shares
+  // Share counts are floats, so compare with a tolerance: selling 0.972 out of a
+  // position stored as 0.9719999999999995 is a full close, not an overflow.
+  const SHARE_EPS   = 1e-8
+  const maxShares   = Math.round(position.shares * 1e8) / 1e8
+  const sellShares  = parseFloat(shares) || 0
+  const isPartial   = sellShares > 0 && maxShares - sellShares > SHARE_EPS
   const remaining   = Math.round((position.shares - sellShares) * 1e6) / 1e6
 
   const handleSubmit = async e => {
     e.preventDefault()
     setError('')
-    if (sellShares <= 0 || sellShares > position.shares) {
-      setError(`Shares must be between 1 and ${position.shares}`)
+    if (sellShares <= 0 || sellShares - maxShares > SHARE_EPS) {
+      setError(`Shares must be between 1 and ${maxShares}`)
       return
     }
     const err = await onClose(position.id, { close_date: closeDate, total_sell: totalSell, shares: sellShares })
@@ -170,8 +174,8 @@ function CloseFormRow({ position, colSpan, onClose, onCancel }) {
           <div className="close-form-field">
             <label>Shares to Sell</label>
             <input
-              type="number" step="any" min="0.000001" max={position.shares} className="form-input"
-              placeholder={String(position.shares)} value={shares}
+              type="number" step="any" min="0.000001" max={maxShares} className="form-input"
+              placeholder={String(maxShares)} value={shares}
               onChange={e => setShares(e.target.value)} required
             />
           </div>

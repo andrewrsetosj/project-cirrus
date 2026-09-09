@@ -21,6 +21,7 @@ export default function App() {
   const [spyData,        setSpyData]        = useState({})
   const [indexPrices,    setIndexPrices]    = useState({})
   const [indexHistory,   setIndexHistory]   = useState({ VOO: {}, QQQ: {} })
+  const [holdingsHistory, setHoldingsHistory] = useState({})
   const [allContributions, setAllContributions] = useState([])
   const [allIncomeLogs,    setAllIncomeLogs]    = useState([])
   const validTabs = ['dashboard', 'trades', 'positions', 'contributions', 'income', 'research', 'checkpoint']
@@ -235,15 +236,17 @@ export default function App() {
   // Fetch benchmark history (SPY/VOO/QQQ) from the earliest contribution date
   // across ALL accounts — a superset range serves every account view, so this
   // runs once rather than on every account switch.
+  // adjusted=1 gives the dividend-adjusted series, so the benchmark earns total
+  // return and is comparable to a portfolio value that includes logged income.
   useEffect(() => {
     if (!allContributions.length) return
     const start = allContributions.reduce((min, c) => c.date < min ? c.date : min, allContributions[0].date)
-    fetch(`/market/sparkdata?symbol=SPY&start=${start}`)
+    fetch(`/market/sparkdata?symbol=SPY&start=${start}&adjusted=1`)
       .then(r => r.json()).then(d => setSpyData(d)).catch(() => {})
     Promise.all([
       fetch('/market/prices?symbols=SPY,VOO,QQQ').then(r => r.json()),
-      fetch(`/market/sparkdata?symbol=VOO&start=${start}`).then(r => r.json()),
-      fetch(`/market/sparkdata?symbol=QQQ&start=${start}`).then(r => r.json()),
+      fetch(`/market/sparkdata?symbol=VOO&start=${start}&adjusted=1`).then(r => r.json()),
+      fetch(`/market/sparkdata?symbol=QQQ&start=${start}&adjusted=1`).then(r => r.json()),
     ]).then(([idxPrices, vooHist, qqqHist]) => {
       const flat = {}
       Object.entries(idxPrices).forEach(([sym, info]) => { if (info?.price != null) flat[sym] = info.price })
@@ -251,6 +254,18 @@ export default function App() {
       setIndexHistory({ VOO: vooHist, QQQ: qqqHist })
     }).catch(() => {})
   }, [allContributions])
+
+  // Daily closes for every symbol ever held, so the equity curve can mark open
+  // positions to market at each point instead of showing realized P&L alone.
+  useEffect(() => {
+    if (!allTrades.length && !allPositions.length) return
+    const symbols = [...new Set([...allTrades, ...allPositions].map(x => x.symbol))]
+    const dates   = [...allTrades, ...allPositions].map(x => x.open_date).filter(Boolean)
+    if (!symbols.length || !dates.length) return
+    const start = dates.reduce((min, d) => d < min ? d : min, dates[0])
+    fetch(`/market/dailycloses?symbols=${symbols.join(',')}&start=${start}`)
+      .then(r => r.json()).then(d => setHoldingsHistory(d)).catch(() => {})
+  }, [allTrades, allPositions])
 
   // Initial price load when positions arrive (all accounts' symbols)
   useEffect(() => { if (allPositions.length) fetchPrices(allPositions) }, [allPositions, fetchPrices])
@@ -269,7 +284,7 @@ export default function App() {
       <Header account={account} onAccount={handleSetAccount} />
       <TabBar tab={tab} onTab={handleSetTab} positionCount={positions.length} checkpointCount={checkpoints.length} />
       <main className="main">
-        {tab === 'dashboard' && <Dashboard account={account} trades={trades} spyData={spyData} indexPrices={indexPrices} indexHistory={indexHistory} contributions={contributions} positions={positions} prices={prices} incomeLogs={incomeLogs} />}
+        {tab === 'dashboard' && <Dashboard account={account} trades={trades} spyData={spyData} indexPrices={indexPrices} indexHistory={indexHistory} holdingsHistory={holdingsHistory} contributions={contributions} positions={positions} prices={prices} incomeLogs={incomeLogs} />}
         {tab === 'trades'    && <Trades trades={trades} onAdd={combined ? null : addTrade} onDelete={deleteTrade} onUpdate={updateTrade} positions={positions} onClosePosition={closePosition} />}
         {tab === 'positions' && (
           <>

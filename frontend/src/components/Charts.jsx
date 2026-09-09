@@ -145,11 +145,26 @@ function lookupPrice(history, dateStr) {
   return null
 }
 
-function buildFundLine(history, contributions, sorted, startDate) {
+// Mark to market every lot still held on `date`: open positions opened by then,
+// plus trades that had opened but not yet closed. Lots whose symbol has no price
+// for that date are skipped. Returns 0 while holdingsHistory is still loading,
+// which degrades the line to realized-only rather than breaking it.
+function unrealizedAt(date, positions, trades, holdingsHistory) {
+  let sum = 0
+  const mark = lot => {
+    const price = lookupPrice(holdingsHistory[lot.symbol] ?? {}, date)
+    if (price != null) sum += price * lot.shares - lot.total_buy
+  }
+  positions.forEach(p => { if (p.open_date <= date) mark(p) })
+  trades.forEach(t => { if (t.open_date <= date && t.close_date > date) mark(t) })
+  return r2(sum)
+}
+
+function buildFundLine(history, contributions, sorted, startDate, clamped) {
   if (!Object.keys(history).length) return null
   const tranches = contributions
     .map(c => {
-      const buyOn = startDate && c.date < startDate ? startDate : c.date
+      const buyOn = clamped && startDate && c.date < startDate ? startDate : c.date
       const price = lookupPrice(history, buyOn)
       return price ? { date: buyOn, shares: c.amount / price, cost: c.amount } : null
     })
@@ -168,20 +183,26 @@ function buildFundLine(history, contributions, sorted, startDate) {
   return [null, 0, ...line]
 }
 
-export function EquityCurve({ account = 'ira', trades, spyData = {}, contributions = [], indexHistory = {} }) {
+export function EquityCurve({ account = 'ira', trades, spyData = {}, contributions = [], indexHistory = {},
+                              positions = [], holdingsHistory = {}, clamped = false }) {
   const isAll = account === 'all'
   const sorted = [...trades].sort((a, b) =>
     a.close_date < b.close_date ? -1 : a.close_date > b.close_date ? 1 : a.id - b.id
   )
-  const firstInvestDate = trades.length
-    ? trades.reduce((min, t) => t.open_date < min ? t.open_date : min, trades[0].open_date)
-    : null
+  // Open positions count too — see the matching note in Dashboard.
+  const firstInvestDate = [...trades, ...positions]
+    .reduce((min, x) => (min == null || x.open_date < min ? x.open_date : min), null)
   const accountDate = contributions.length
     ? contributions.reduce((min, c) => c.date < min ? c.date : min, contributions[0].date)
     : ''
 
+  // Plot total gain (realized + open positions marked to market), so the line is
+  // the same quantity the fund lines show rather than realized P&L alone.
   let cum = 0
-  const tradeData   = sorted.map(t => { cum = r2(cum + t.net); return cum })
+  const tradeData = sorted.map(t => {
+    cum = r2(cum + t.net)
+    return r2(cum + unrealizedAt(t.close_date, positions, trades, holdingsHistory))
+  })
   const tradeLabels = sorted.map(t => `${t.symbol} · ${t.close_date}`)
 
   const data   = [0, 0, ...tradeData]
@@ -196,7 +217,7 @@ export function EquityCurve({ account = 'ira', trades, spyData = {}, contributio
         { sym: 'VOO', history: indexHistory.VOO ?? {} },
         { sym: 'QQQ', history: indexHistory.QQQ ?? {} },
       ].flatMap(({ sym, history }) => {
-        const line = buildFundLine(history, contributions, sorted, firstInvestDate)
+        const line = buildFundLine(history, contributions, sorted, firstInvestDate, clamped)
         if (!line) return []
         return [{
           label: sym,
@@ -303,6 +324,111 @@ export function EquityCurve({ account = 'ira', trades, spyData = {}, contributio
               title: axisTitle('Cumulative P&L ($)'),
             }
           }
+        }}
+      />
+    </div>
+  )
+}
+
+// ── Portfolio value over time ────────────────────────────────────────────────
+// Unlike EquityCurve, whose x-axis is trade-close events, this one is calendar
+// time: a year of holding and a busy week are drawn to scale. `mode` picks what
+// the y-axis measures — dollars, or flow-neutral growth of an initial 1.00.
+export function PortfolioTimeSeries({ series = [], benchmarks = {}, mode = 'value' }) {
+  if (!series.length) return null
+
+  const labels = series.map(r => r.date)
+
+  // Growth mode restates every line as a return index so lines with different
+  // amounts of money in them can be compared on shape rather than size.
+  const asGrowth = rows => {
+    const out = []
+    let level = 1, prev = null
+    for (const r of rows) {
+      if (prev != null && prev > 0) level *= (r.value - (r.flow ?? 0)) / prev
+      out.push(r2((level - 1) * 100))
+      prev = r.value
+    }
+    return out
+  }
+  const shape = rows => mode === 'growth' ? asGrowth(rows) : rows.map(r => r.value)
+
+  const mine = shape(series)
+  const up   = mine[mine.length - 1] >= (mode === 'growth' ? 0 : mine[0])
+  const color = up ? CYAN : LOSS_B
+
+  // Each benchmark is shaped on its own rows, then matched to the portfolio's
+  // dates. Computing growth first means a date the benchmark lacks leaves a gap
+  // in the line rather than a zero that would corrupt the compounding.
+  const benchSets = Object.entries(benchmarks).flatMap(([sym, rows]) => {
+    if (!rows?.length) return []
+    const shaped = shape(rows)
+    const byDate = new Map(rows.map((r, i) => [r.date, shaped[i]]))
+    return [{
+      label: sym, endLabel: sym,
+      data: labels.map(d => byDate.has(d) ? byDate.get(d) : null),
+      borderColor: INDEX_COLORS[sym], borderWidth: 1.25,
+      pointRadius: 0, pointHoverRadius: 3, fill: false, tension: 0.2, spanGaps: true,
+    }]
+  })
+
+  const fmt = v => mode === 'growth'
+    ? `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`
+    : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+
+  return (
+    <div style={{ height: 300 }}>
+      <Line
+        plugins={[neonGlow, endLabels, crosshair]}
+        data={{
+          labels,
+          datasets: [
+            {
+              label: mode === 'growth' ? 'Return' : 'Portfolio',
+              endLabel: 'YOU',
+              data: mine,
+              glow: up ? 'rgba(0,200,225,0.65)' : 'rgba(255,69,96,0.55)',
+              borderColor: color,
+              borderWidth: 2.25,
+              pointRadius: 0,
+              pointHoverRadius: 4,
+              fill: mode !== 'growth',
+              backgroundColor: ctx => {
+                const { chart } = ctx
+                const { ctx: c, chartArea } = chart
+                if (!chartArea) return 'transparent'
+                const grad = c.createLinearGradient(0, chartArea.top, 0, chartArea.bottom)
+                grad.addColorStop(0, up ? 'rgba(0,200,225,0.22)' : 'rgba(255,69,96,0.20)')
+                grad.addColorStop(1, 'rgba(0,0,0,0)')
+                return grad
+              },
+              tension: 0.2,
+            },
+            ...benchSets,
+          ],
+        }}
+        options={{
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          layout: { padding: { right: 44 } },
+          plugins: {
+            tooltip: {
+              ...tooltipBase,
+              callbacks: {
+                title: items => items[0]?.label ?? '',
+                label: ctx => `${ctx.dataset.label}: ${fmt(ctx.parsed.y)}`,
+              },
+            },
+          },
+          scales: {
+            x: { ...scaleBase, ticks: { ...tickBase, maxRotation: 0, maxTicksLimit: 10, autoSkip: true } },
+            y: {
+              ...scaleBase,
+              ticks: { ...tickBase, callback: v => fmt(v) },
+              title: axisTitle(mode === 'growth' ? 'Time-weighted return' : 'Value ($)'),
+            },
+          },
         }}
       />
     </div>

@@ -1,9 +1,9 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { r2, tradeCategory, xirr } from '../utils/compute'
 import { fmtDollar, fmtPct, fmtNum } from '../utils/format'
 import MetricCard from './MetricCard'
 import MetricModal from './MetricModal'
-import { EquityCurve, SymbolPL, MonthlyPL, WinLossChart, HoldScatter, INDEX_COLORS } from './Charts'
+import { EquityCurve, PortfolioTimeSeries, SymbolPL, MonthlyPL, WinLossChart, HoldScatter, INDEX_COLORS } from './Charts'
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 const fmtMonth = m => { const [y, mo] = m.split('-'); return `${MONTHS[+mo-1]} '${y.slice(2)}` }
@@ -280,10 +280,35 @@ function TopTradesTable({ trades, variant }) {
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
-export default function Dashboard({ account = 'ira', trades, spyData = {}, indexPrices = {}, indexHistory = { VOO: {}, QQQ: {} }, contributions = [], positions = [], prices = {}, incomeLogs = [] }) {
-  if (!trades.length) return null
-
+export default function Dashboard({ account = 'ira', trades, spyData = {}, indexPrices = {}, indexHistory = { VOO: {}, QQQ: {} }, holdingsHistory = {}, contributions = [], positions = [], prices = {}, incomeLogs = [] }) {
   const [modal, setModal] = useState(null)
+  // Benchmark timing: unclamped buys the index on each contribution date ("what if
+  // I'd indexed every deposit"); clamped defers pre-first-trade deposits to the
+  // first trade date ("what if I'd indexed once I started investing").
+  const [clamped, setClamped] = useState(() => {
+    try { return localStorage.getItem('cirrus.benchClamped') === '1' } catch { return false }
+  })
+  const toggleClamp = next => {
+    setClamped(next)
+    try { localStorage.setItem('cirrus.benchClamped', next ? '1' : '0') } catch { /* private mode */ }
+  }
+
+  // Daily value/benchmark series and the risk stats derived from it. Computed
+  // server-side because it joins holdings against per-symbol price history.
+  const [timeline, setTimeline] = useState(null)
+  const [timelineMode, setTimelineMode] = useState('value')
+  useEffect(() => {
+    let live = true
+    setTimeline(null)
+    fetch(`/analytics/timeseries?account=${account}&clamped=${clamped ? 1 : 0}`)
+      .then(r => r.json())
+      .then(d => { if (live) setTimeline(d) })
+      .catch(() => { if (live) setTimeline({ series: [], stats: {}, benchmarks: {} }) })
+    return () => { live = false }
+  }, [account, clamped])
+
+  // Hooks must run on every render, so this early-out comes after them.
+  if (!trades.length) return null
 
   // Each income entry is an individual dividend/interest event; total income
   // is the sum of every logged entry (managed in the Income tab).
@@ -307,27 +332,32 @@ export default function Dashboard({ account = 'ira', trades, spyData = {}, index
   const totalCapital = r2(trades.reduce((s, t) => s + t.total_buy, 0))
   const returnOnCap  = totalCapital > 0 ? totalPL / totalCapital : 0
 
-  // Lookup a price from a history dict, searching up to 5 days back for weekends/holidays
+  // Lookup a price from a history dict, searching up to 5 days back for weekends/holidays.
+  // Steps in UTC so a DST shift can't land the lookback on the wrong calendar day.
   const lookupPrice = (history, dateStr) => {
     if (history[dateStr] != null) return history[dateStr]
+    const d = new Date(dateStr + 'T12:00:00Z')
     for (let i = 1; i <= 5; i++) {
-      const d = new Date(dateStr); d.setDate(d.getDate() - i)
+      d.setUTCDate(d.getUTCDate() - 1)
       const s = d.toISOString().slice(0, 10)
       if (history[s] != null) return history[s]
     }
     return null
   }
 
-  const firstInvestDate = trades.length
-    ? trades.reduce((min, t) => t.open_date < min ? t.open_date : min, trades[0].open_date)
-    : null
+  // Earliest money actually put to work — open positions count too, otherwise a
+  // holding you never sold would push this date forward and skew clamped mode.
+  const firstInvestDate = [...trades, ...positions]
+    .reduce((min, x) => (min == null || x.open_date < min ? x.open_date : min), null)
 
-  // Simulate investing all contributions into a fund (buys on deposits, sells on withdrawals/fees)
-  // Contributions before firstInvestDate are clamped to that date so cash sitting idle isn't counted
+  // Simulate investing all contributions into a fund (buys on deposits, sells on withdrawals/fees).
+  // When clamped, contributions predating firstInvestDate buy at that date instead,
+  // so cash that sat idle before the first trade isn't credited with market exposure.
+  // `history` is the dividend-adjusted series, so this is a total-return benchmark.
   const simulateFundValue = (history, currentPrice) => {
     if (!currentPrice || !Object.keys(history).length) return null
     const totalShares = contributions.reduce((sum, c) => {
-      const buyOn = firstInvestDate && c.date < firstInvestDate ? firstInvestDate : c.date
+      const buyOn = clamped && firstInvestDate && c.date < firstInvestDate ? firstInvestDate : c.date
       const price = lookupPrice(history, buyOn)
       return price ? sum + c.amount / price : sum
     }, 0)
@@ -624,7 +654,34 @@ export default function Dashboard({ account = 'ira', trades, spyData = {}, index
 
       {/* ── Index Fund Equivalency ── */}
       <div className="dash-section">
-        <SectionLabel>Index Fund Benchmark</SectionLabel>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <SectionLabel>Index Fund Benchmark</SectionLabel>
+          <div className="bench-toggle" role="group" aria-label="Benchmark buy timing">
+            <button
+              type="button"
+              className={!clamped ? 'active' : undefined}
+              aria-pressed={!clamped}
+              onClick={() => toggleClamp(false)}
+              title="Buy the index on each contribution date — what if every deposit had gone into the index"
+            >
+              On deposit
+            </button>
+            <button
+              type="button"
+              className={clamped ? 'active' : undefined}
+              aria-pressed={clamped}
+              onClick={() => toggleClamp(true)}
+              title={`Deposits before your first trade (${firstInvestDate ?? '—'}) buy at that date instead — what if you'd indexed once you started investing`}
+            >
+              From first trade
+            </button>
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 8 }}>
+          total return, dividends reinvested · {clamped
+            ? <>deposits before <span className="hl">{firstInvestDate ?? '—'}</span> buy at that date</>
+            : <>each deposit buys on its own date</>}
+        </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
           {[
             { sym: 'SPY', history: spyData },
@@ -657,11 +714,74 @@ export default function Dashboard({ account = 'ira', trades, spyData = {}, index
         </div>
       </div>
 
+      {/* ── Performance over calendar time ── */}
+      <div className="dash-section">
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <SectionLabel>Performance Over Time</SectionLabel>
+          <div className="bench-toggle" role="group" aria-label="Chart units">
+            <button type="button" className={timelineMode === 'value' ? 'active' : undefined}
+                    aria-pressed={timelineMode === 'value'}
+                    onClick={() => setTimelineMode('value')}
+                    title="Account value in dollars">Value</button>
+            <button type="button" className={timelineMode === 'growth' ? 'active' : undefined}
+                    aria-pressed={timelineMode === 'growth'}
+                    onClick={() => setTimelineMode('growth')}
+                    title="Time-weighted return — deposits removed, so only performance shows">Return %</button>
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 8 }}>
+          {timelineMode === 'growth'
+            ? 'time-weighted — deposits removed, so this is picking skill, not deposit timing'
+            : 'account value including deposits'}
+        </div>
+        {timeline === null
+          ? <div style={{ height: 300, display: 'grid', placeItems: 'center', color: 'var(--t3)', fontSize: 13 }}>loading…</div>
+          : timeline.series?.length
+            ? <PortfolioTimeSeries series={timeline.series} benchmarks={timeline.benchmarks} mode={timelineMode} />
+            : <div style={{ height: 300, display: 'grid', placeItems: 'center', color: 'var(--t3)', fontSize: 13 }}>no history yet</div>}
+      </div>
+
+      {/* ── Risk & return ── */}
+      {timeline?.stats?.twr != null && (
+        <div className="dash-section">
+          <SectionLabel>Risk &amp; Return</SectionLabel>
+          <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 8 }}>
+            over {timeline.stats.days} trading days from <span className="hl">{timeline.start}</span>
+            {timeline.stats.beta != null && <> · beta measured against SPY</>}
+          </div>
+          <div className="metric-grid-10">
+            <MetricCard label="Time-Weighted Return" value={fmtPct(timeline.stats.twr, 2)}
+                        variant={timeline.stats.twr >= 0 ? 'gain' : 'loss'}
+                        secondary={<>vs SPY <span className="hl">{fmtPct(timeline.benchmark_stats?.SPY?.twr ?? 0, 2)}</span></>} />
+            <MetricCard label="Annualized" value={timeline.stats.twr_annualized != null ? fmtPct(timeline.stats.twr_annualized, 2) : '—'}
+                        variant={(timeline.stats.twr_annualized ?? 0) >= 0 ? 'gain' : 'loss'}
+                        secondary="compounded per year" />
+            <MetricCard label="Volatility" value={fmtPct(timeline.stats.volatility, 2)}
+                        secondary="annualized std dev" />
+            <MetricCard label="Max Drawdown" value={fmtPct(timeline.stats.max_drawdown, 2)} variant="loss"
+                        secondary={<>SPY <span className="hl">{fmtPct(timeline.benchmark_stats?.SPY?.max_drawdown ?? 0, 2)}</span></>} />
+            <MetricCard label="Sharpe" value={timeline.stats.sharpe != null ? fmtNum(timeline.stats.sharpe) : '—'}
+                        secondary="return per unit of risk" />
+            <MetricCard label="Sortino" value={timeline.stats.sortino != null ? fmtNum(timeline.stats.sortino) : '—'}
+                        secondary="downside risk only" />
+            <MetricCard label="Beta vs SPY" value={timeline.stats.beta != null ? fmtNum(timeline.stats.beta) : '—'}
+                        secondary={timeline.stats.beta != null
+                          ? (timeline.stats.beta > 1 ? 'more volatile than market' : 'less volatile than market')
+                          : 'needs a moving benchmark'} />
+            <MetricCard label="Best Day" value={fmtPct(timeline.stats.best_day, 2)} variant="gain" secondary="single-day gain" />
+            <MetricCard label="Worst Day" value={fmtPct(timeline.stats.worst_day, 2)} variant="loss" secondary="single-day loss" />
+            <MetricCard label="vs QQQ" value={fmtPct(timeline.stats.twr - (timeline.benchmark_stats?.QQQ?.twr ?? 0), 2)}
+                        variant={timeline.stats.twr >= (timeline.benchmark_stats?.QQQ?.twr ?? 0) ? 'gain' : 'loss'}
+                        secondary={<>QQQ <span className="hl">{fmtPct(timeline.benchmark_stats?.QQQ?.twr ?? 0, 2)}</span></>} />
+          </div>
+        </div>
+      )}
+
       {/* ── Equity Curve ── */}
       <div className="dash-section">
-        <SectionLabel>Equity Curve — Cumulative P&amp;L</SectionLabel>
+        <SectionLabel>Equity Curve — Total Gain (realized + open)</SectionLabel>
         <div className="chart-full">
-          <EquityCurve account={account} trades={trades} spyData={spyData} contributions={contributions} indexHistory={indexHistory} />
+          <EquityCurve account={account} trades={trades} spyData={spyData} contributions={contributions} indexHistory={indexHistory} positions={positions} holdingsHistory={holdingsHistory} clamped={clamped} />
         </div>
       </div>
 
