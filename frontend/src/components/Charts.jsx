@@ -83,6 +83,12 @@ const axisTitle = text => ({
   font: { family: 'Inter', size: 10, weight: '600' },
 })
 
+// Fade a hex colour toward transparent — used to push reference lines back.
+const dim = (hex, alpha) => {
+  const n = parseInt(hex.slice(1), 16)
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`
+}
+
 // ── Equity Curve ─────────────────────────────────────────────────────────────
 export const INDEX_COLORS = {
   SPY: '#bd7042',  // muted clay
@@ -360,6 +366,8 @@ export function PortfolioTimeSeries({ series = [], benchmarks = {}, mode = 'valu
   // Each benchmark is shaped on its own rows, then matched to the portfolio's
   // dates. Computing growth first means a date the benchmark lacks leaves a gap
   // in the line rather than a zero that would corrupt the compounding.
+  // Drawn thinner and dimmed so the portfolio line reads first — they are
+  // reference, not subject.
   const benchSets = Object.entries(benchmarks).flatMap(([sym, rows]) => {
     if (!rows?.length) return []
     const shaped = shape(rows)
@@ -367,10 +375,16 @@ export function PortfolioTimeSeries({ series = [], benchmarks = {}, mode = 'valu
     return [{
       label: sym, endLabel: sym,
       data: labels.map(d => byDate.has(d) ? byDate.get(d) : null),
-      borderColor: INDEX_COLORS[sym], borderWidth: 1.25,
+      borderColor: dim(INDEX_COLORS[sym], 0.62), borderWidth: 1,
       pointRadius: 0, pointHoverRadius: 3, fill: false, tension: 0.2, spanGaps: true,
     }]
   })
+
+  // A zero baseline only means something when the axis is a return.
+  const zeroLine = mode === 'growth'
+    ? { color: ctx => ctx.tick?.value === 0 ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.04)',
+        lineWidth: ctx => ctx.tick?.value === 0 ? 1 : 1 }
+    : undefined
 
   const fmt = v => mode === 'growth'
     ? `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`
@@ -425,7 +439,8 @@ export function PortfolioTimeSeries({ series = [], benchmarks = {}, mode = 'valu
             x: { ...scaleBase, ticks: { ...tickBase, maxRotation: 0, maxTicksLimit: 10, autoSkip: true } },
             y: {
               ...scaleBase,
-              ticks: { ...tickBase, callback: v => fmt(v) },
+              ...(zeroLine ? { grid: { ...(scaleBase.grid ?? {}), ...zeroLine } } : {}),
+              ticks: { ...tickBase, callback: v => fmt(v), maxTicksLimit: 6 },
               title: axisTitle(mode === 'growth' ? 'Time-weighted return' : 'Value ($)'),
             },
           },

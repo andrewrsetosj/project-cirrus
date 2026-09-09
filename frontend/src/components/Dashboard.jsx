@@ -310,6 +310,26 @@ export default function Dashboard({ account = 'ira', trades, spyData = {}, index
   // Hooks must run on every render, so this early-out comes after them.
   if (!trades.length) return null
 
+  // Headline figures pulled from the daily series, plus the sparkline samples.
+  const twr     = timeline?.stats?.twr ?? null
+  const spyTwr  = timeline?.benchmark_stats?.SPY?.twr ?? null
+  const beatSpy = (twr != null && spyTwr != null) ? twr >= spyTwr : null
+  const spyMaxDD = timeline?.benchmark_stats?.SPY?.max_drawdown ?? null
+  const valueSpark = timeline?.series?.map(r => r.value) ?? null
+  // Flow-neutral growth, so the sparkline shows performance rather than deposits.
+  const growthSpark = (() => {
+    const rows = timeline?.series
+    if (!rows?.length) return null
+    const out = []
+    let level = 1, prev = null
+    for (const r of rows) {
+      if (prev != null && prev > 0) level *= (r.value - (r.flow ?? 0)) / prev
+      out.push((level - 1) * 100)
+      prev = r.value
+    }
+    return out
+  })()
+
   // Each income entry is an individual dividend/interest event; total income
   // is the sum of every logged entry (managed in the Income tab).
   const currentIncome = incomeLogs.length ? r2(incomeLogs.reduce((s, e) => s + e.amount, 0)) : null
@@ -638,23 +658,62 @@ export default function Dashboard({ account = 'ira', trades, spyData = {}, index
         </MetricModal>
       )}
 
-      {/* ── Metrics ── */}
-      <div className="metric-grid-10">
-        <MetricCard label="Account Value"     value={fmtDollar(portfolioValue)}            variant={portfolioValue >= 0 ? 'gain' : 'loss'} secondary={<>contributions + realized + open</>}                                                                                      onClick={() => setModal('Account Value')} />
-        <MetricCard label="Total P&L"         value={fmtDollar(totalPL)}                  variant={totalPL >= 0 ? 'gain' : 'loss'} secondary={<><span className="hl">{trades.length}</span> closed trades</>}                                                                    onClick={() => setModal('Total P&L')} />
-        <MetricCard label="Profit Factor"     value={pf === Infinity ? '∞' : fmtNum(pf)}  secondary={<>{fmtDollar(totalWin)} won / {fmtDollar(Math.abs(totalLoss))} lost</>}                                                                                                  onClick={() => setModal('Profit Factor')} />
-        <MetricCard label="Return on Capital" value={fmtPct(returnOnCap, 2)}              secondary={<>on <span className="hl">{fmtDollar(totalCapital)}</span> deployed</>}                                                                                                    onClick={() => setModal('Return on Capital')} />
-        <MetricCard label="XIRR"              value={xirrRate != null ? fmtPct(xirrRate, 2) : '—'} secondary="annualized return on contributions"                                                                                                                             onClick={() => setModal('XIRR')} />
-        <MetricCard label="Avg Winner"        value={avgWinner != null ? fmtDollar(avgWinner) : '—'} variant="gain" secondary={bestWin  != null ? <>best: <span className="hl">{fmtDollar(bestWin)}</span></>  : null}                                                         onClick={() => setModal('Avg Winner')} />
-        <MetricCard label="Avg Loser"         value={avgLoser  != null ? fmtDollar(avgLoser)  : '—'} variant="loss" secondary={worstLoss != null ? <>worst: <span className="hl">{fmtDollar(worstLoss)}</span></> : null}                                                      onClick={() => setModal('Avg Loser')} />
-        <MetricCard label="Largest Gain"      value={largestGain != null ? fmtDollar(largestGain.net) : '—'} variant="gain" secondary={largestGain ? <><span className="hl">{largestGain.symbol}</span> · {largestGain.close_date}</> : null}                                  onClick={() => setModal('Largest Gain')} />
-        <MetricCard label="Largest Loss"      value={largestLoss != null ? fmtDollar(largestLoss.net) : '—'} variant="loss" secondary={largestLoss ? <><span className="hl">{largestLoss.symbol}</span> · {largestLoss.close_date}</> : null}                                  onClick={() => setModal('Largest Loss')} />
-        <MetricCard label="Income"            value={currentIncome != null ? fmtDollar(currentIncome) : '—'} secondary="dividends &amp; interest"                                                                                                                              onClick={() => setModal('Income')} />
+      {/* ── Metrics ──
+          Three headline numbers carry the size; the rest support them. Colour is
+          reserved for figures whose sign or comparison actually means something —
+          a metric that is negative by definition stays neutral. */}
+      <div className="metric-grid-tiered">
+        <MetricCard tier="hero" label="Account Value" value={fmtDollar(portfolioValue)}
+                    variant={portfolioValue >= 0 ? 'gain' : 'loss'}
+                    secondary={<>contributions + realized + open</>}
+                    spark={valueSpark} sparkColor="var(--cyan)"
+                    onClick={() => setModal('Account Value')} />
+        <MetricCard tier="hero" label="Total P&L" value={fmtDollar(totalPL)}
+                    variant={totalPL >= 0 ? 'gain' : 'loss'}
+                    secondary={<><span className="hl">{trades.length}</span> closed trades</>}
+                    onClick={() => setModal('Total P&L')} />
+        <MetricCard tier="hero" label="Time-Weighted Return"
+                    value={twr != null ? fmtPct(twr, 2) : '—'}
+                    variant={beatSpy == null ? undefined : beatSpy ? 'gain' : 'loss'}
+                    secondary={spyTwr != null
+                      ? <>SPY <span className="hl">{fmtPct(spyTwr, 2)}</span> · {beatSpy ? 'ahead' : 'behind'} on picking</>
+                      : 'deposits removed'}
+                    spark={growthSpark}
+                    sparkColor={beatSpy === false ? 'var(--red)' : 'var(--green)'} />
+
+        <MetricCard tier="supporting" label="Profit Factor" value={pf === Infinity ? '∞' : fmtNum(pf)}
+                    secondary={<>{fmtDollar(totalWin)} won / {fmtDollar(Math.abs(totalLoss))} lost</>}
+                    onClick={() => setModal('Profit Factor')} />
+        <MetricCard tier="supporting" label="Return on Capital" value={fmtPct(returnOnCap, 2)}
+                    secondary={<>on <span className="hl">{fmtDollar(totalCapital)}</span> deployed</>}
+                    onClick={() => setModal('Return on Capital')} />
+        <MetricCard tier="supporting" label="XIRR" value={xirrRate != null ? fmtPct(xirrRate, 2) : '—'}
+                    secondary="incl. deposit timing"
+                    onClick={() => setModal('XIRR')} />
+        <MetricCard tier="supporting" label="Income" value={currentIncome != null ? fmtDollar(currentIncome) : '—'}
+                    secondary="dividends &amp; interest"
+                    onClick={() => setModal('Income')} />
+        <MetricCard tier="supporting" label="Avg Winner" value={avgWinner != null ? fmtDollar(avgWinner) : '—'}
+                    variant="gain"
+                    secondary={bestWin != null ? <>best: <span className="hl">{fmtDollar(bestWin)}</span></> : null}
+                    onClick={() => setModal('Avg Winner')} />
+        <MetricCard tier="supporting" label="Avg Loser" value={avgLoser != null ? fmtDollar(avgLoser) : '—'}
+                    variant="loss"
+                    secondary={worstLoss != null ? <>worst: <span className="hl">{fmtDollar(worstLoss)}</span></> : null}
+                    onClick={() => setModal('Avg Loser')} />
+        <MetricCard tier="supporting" label="Largest Gain" value={largestGain != null ? fmtDollar(largestGain.net) : '—'}
+                    variant="gain"
+                    secondary={largestGain ? <><span className="hl">{largestGain.symbol}</span> · {largestGain.close_date}</> : null}
+                    onClick={() => setModal('Largest Gain')} />
+        <MetricCard tier="supporting" label="Largest Loss" value={largestLoss != null ? fmtDollar(largestLoss.net) : '—'}
+                    variant="loss"
+                    secondary={largestLoss ? <><span className="hl">{largestLoss.symbol}</span> · {largestLoss.close_date}</> : null}
+                    onClick={() => setModal('Largest Loss')} />
       </div>
 
       {/* ── Index Fund Equivalency ── */}
       <div className="dash-section">
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <div className="section-head">
           <SectionLabel>Index Fund Benchmark</SectionLabel>
           <div className="bench-toggle" role="group" aria-label="Benchmark buy timing">
             <button
@@ -677,7 +736,7 @@ export default function Dashboard({ account = 'ira', trades, spyData = {}, index
             </button>
           </div>
         </div>
-        <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 8 }}>
+        <div className="section-note">
           total return, dividends reinvested · {clamped
             ? <>deposits before <span className="hl">{firstInvestDate ?? '—'}</span> buy at that date</>
             : <>each deposit buys on its own date</>}
@@ -716,7 +775,7 @@ export default function Dashboard({ account = 'ira', trades, spyData = {}, index
 
       {/* ── Performance over calendar time ── */}
       <div className="dash-section">
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <div className="section-head">
           <SectionLabel>Performance Over Time</SectionLabel>
           <div className="bench-toggle" role="group" aria-label="Chart units">
             <button type="button" className={timelineMode === 'value' ? 'active' : undefined}
@@ -729,7 +788,7 @@ export default function Dashboard({ account = 'ira', trades, spyData = {}, index
                     title="Time-weighted return — deposits removed, so only performance shows">Return %</button>
           </div>
         </div>
-        <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 8 }}>
+        <div className="section-note">
           {timelineMode === 'growth'
             ? 'time-weighted — deposits removed, so this is picking skill, not deposit timing'
             : 'account value including deposits'}
@@ -741,38 +800,47 @@ export default function Dashboard({ account = 'ira', trades, spyData = {}, index
             : <div style={{ height: 300, display: 'grid', placeItems: 'center', color: 'var(--t3)', fontSize: 13 }}>no history yet</div>}
       </div>
 
-      {/* ── Risk & return ── */}
+      {/* ── Risk & return ──
+          Volatility, drawdown and the day extremes carry a fixed sign, so their
+          colour would restate the label rather than tell you anything. They stay
+          neutral; drawdown earns colour only by beating or trailing SPY. */}
       {timeline?.stats?.twr != null && (
         <div className="dash-section">
           <SectionLabel>Risk &amp; Return</SectionLabel>
-          <div style={{ fontSize: 11, color: 'var(--t3)', marginBottom: 8 }}>
-            over {timeline.stats.days} trading days from <span className="hl">{timeline.start}</span>
-            {timeline.stats.beta != null && <> · beta measured against SPY</>}
+          <div className="section-note">
+            {timeline.stats.days} trading days from <span className="hl">{timeline.start}</span>
+            {timeline.stats.beta != null && <> · beta vs SPY</>}
           </div>
-          <div className="metric-grid-10">
-            <MetricCard label="Time-Weighted Return" value={fmtPct(timeline.stats.twr, 2)}
-                        variant={timeline.stats.twr >= 0 ? 'gain' : 'loss'}
-                        secondary={<>vs SPY <span className="hl">{fmtPct(timeline.benchmark_stats?.SPY?.twr ?? 0, 2)}</span></>} />
-            <MetricCard label="Annualized" value={timeline.stats.twr_annualized != null ? fmtPct(timeline.stats.twr_annualized, 2) : '—'}
+          <div className="metric-grid-tiered">
+            <MetricCard tier="supporting" label="Annualized"
+                        value={timeline.stats.twr_annualized != null ? fmtPct(timeline.stats.twr_annualized, 2) : '—'}
                         variant={(timeline.stats.twr_annualized ?? 0) >= 0 ? 'gain' : 'loss'}
                         secondary="compounded per year" />
-            <MetricCard label="Volatility" value={fmtPct(timeline.stats.volatility, 2)}
-                        secondary="annualized std dev" />
-            <MetricCard label="Max Drawdown" value={fmtPct(timeline.stats.max_drawdown, 2)} variant="loss"
-                        secondary={<>SPY <span className="hl">{fmtPct(timeline.benchmark_stats?.SPY?.max_drawdown ?? 0, 2)}</span></>} />
-            <MetricCard label="Sharpe" value={timeline.stats.sharpe != null ? fmtNum(timeline.stats.sharpe) : '—'}
-                        secondary="return per unit of risk" />
-            <MetricCard label="Sortino" value={timeline.stats.sortino != null ? fmtNum(timeline.stats.sortino) : '—'}
-                        secondary="downside risk only" />
-            <MetricCard label="Beta vs SPY" value={timeline.stats.beta != null ? fmtNum(timeline.stats.beta) : '—'}
+            <MetricCard tier="supporting" label="Volatility" value={fmtPct(timeline.stats.volatility, 2)}
+                        secondary={<>SPY <span className="hl">{fmtPct(timeline.benchmark_stats?.SPY?.volatility ?? 0, 2)}</span></>} />
+            <MetricCard tier="supporting" label="Max Drawdown" value={fmtPct(timeline.stats.max_drawdown, 2)}
+                        variant={spyMaxDD == null ? undefined
+                                 : timeline.stats.max_drawdown >= spyMaxDD ? 'gain' : 'loss'}
+                        secondary={<>SPY <span className="hl">{fmtPct(spyMaxDD ?? 0, 2)}</span></>} />
+            <MetricCard tier="supporting" label="Beta vs SPY"
+                        value={timeline.stats.beta != null ? fmtNum(timeline.stats.beta) : '—'}
                         secondary={timeline.stats.beta != null
-                          ? (timeline.stats.beta > 1 ? 'more volatile than market' : 'less volatile than market')
+                          ? (timeline.stats.beta > 1 ? 'swings harder than market' : 'swings less than market')
                           : 'needs a moving benchmark'} />
-            <MetricCard label="Best Day" value={fmtPct(timeline.stats.best_day, 2)} variant="gain" secondary="single-day gain" />
-            <MetricCard label="Worst Day" value={fmtPct(timeline.stats.worst_day, 2)} variant="loss" secondary="single-day loss" />
-            <MetricCard label="vs QQQ" value={fmtPct(timeline.stats.twr - (timeline.benchmark_stats?.QQQ?.twr ?? 0), 2)}
-                        variant={timeline.stats.twr >= (timeline.benchmark_stats?.QQQ?.twr ?? 0) ? 'gain' : 'loss'}
-                        secondary={<>QQQ <span className="hl">{fmtPct(timeline.benchmark_stats?.QQQ?.twr ?? 0, 2)}</span></>} />
+            <MetricCard tier="supporting" label="Sharpe"
+                        value={timeline.stats.sharpe != null ? fmtNum(timeline.stats.sharpe) : '—'}
+                        variant={timeline.stats.sharpe == null ? undefined
+                                 : timeline.stats.sharpe >= 0 ? 'gain' : 'loss'}
+                        secondary="return per unit of risk" />
+            <MetricCard tier="supporting" label="Sortino"
+                        value={timeline.stats.sortino != null ? fmtNum(timeline.stats.sortino) : '—'}
+                        variant={timeline.stats.sortino == null ? undefined
+                                 : timeline.stats.sortino >= 0 ? 'gain' : 'loss'}
+                        secondary="downside risk only" />
+            <MetricCard tier="supporting" label="Best Day" value={fmtPct(timeline.stats.best_day, 2)}
+                        secondary="largest single-day gain" />
+            <MetricCard tier="supporting" label="Worst Day" value={fmtPct(timeline.stats.worst_day, 2)}
+                        secondary="largest single-day loss" />
           </div>
         </div>
       )}

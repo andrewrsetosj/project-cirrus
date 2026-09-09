@@ -157,6 +157,25 @@ body {
 .acct-btn.active:not(:first-child):not(:last-child) { background: var(--violet); }
 .acct-btn.active:last-child { background: var(--t2); }
 
+/* ── Keyboard focus ─────────────────────────────────────────────────────── */
+/* Only for keyboard users — :focus-visible keeps mouse clicks ring-free. */
+.metric-card-clickable:focus-visible,
+.bench-toggle button:focus-visible,
+.acct-btn:focus-visible,
+.tab-btn:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+  border-radius: var(--r);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* ── Benchmark buy-timing toggle ─────────────────────────────────────────── */
 .bench-toggle {
   display: inline-flex;
@@ -298,26 +317,45 @@ body {
   margin-bottom: 10px;
 }
 
-.metric-grid {
+/* 12 columns so a hero row (3 x span-4) and a supporting row (4 x span-3)
+   share the same gutters. */
+.metric-grid-tiered {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(12, 1fr);
   gap: 12px;
   margin-bottom: 16px;
 }
 
-.metric-grid-8 {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  margin-bottom: 16px;
+.metric-grid-tiered > .tier-hero      { grid-column: span 4; }
+.metric-grid-tiered > .tier-supporting { grid-column: span 3; }
+
+@media (max-width: 1100px) {
+  .metric-grid-tiered > .tier-hero       { grid-column: span 6; }
+  .metric-grid-tiered > .tier-supporting { grid-column: span 4; }
 }
 
-.metric-grid-10 {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 12px;
-  margin-bottom: 16px;
+@media (max-width: 760px) {
+  .metric-grid-tiered > .tier-hero,
+  .metric-grid-tiered > .tier-supporting { grid-column: span 12; }
 }
+
+/* Section header row: label on the left, controls on the right. */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* One-line explanation under a section label. */
+.section-note {
+  font-size: 11px;
+  color: var(--t3);
+  margin-bottom: 8px;
+}
+
+.section-note .hl { color: var(--t2); }
 
 .chart-full {
   background: var(--bg-card);
@@ -447,6 +485,12 @@ body {
 
 .metric-card-clickable {
   cursor: pointer;
+  /* rendered as a <button>, so shed the UA chrome */
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
 }
 
 .metric-card-clickable:hover {
@@ -485,17 +529,44 @@ body {
   line-height: 1;
   letter-spacing: -0.02em;
   margin-bottom: 8px;
+  font-variant-numeric: tabular-nums;
 }
 
 .metric-value.gain { color: var(--green); }
 .metric-value.loss { color: var(--red); }
 
+/* Tiers: the headline numbers earn size, the supporting ones give it back. */
+.metric-card.tier-hero { padding: 20px 22px 18px; }
+.metric-card.tier-hero .metric-value { font-size: 40px; margin-bottom: 10px; }
+
+.metric-card.tier-supporting { padding: 14px 16px 12px; }
+.metric-card.tier-supporting .metric-label { font-size: 9.5px; margin-bottom: 7px; }
+.metric-card.tier-supporting .metric-value { font-size: 19px; margin-bottom: 5px; }
+.metric-card.tier-supporting .metric-secondary { font-size: 10px; }
+
 .metric-secondary {
   font-size: 11px;
   color: var(--t3);
+  position: relative;
+  z-index: 1;
 }
 
 .metric-secondary .hl { color: var(--t2); }
+
+/* ── Sparkline ──────────────────────────────────────────────────────────── */
+/* Sits along the card's bottom edge, behind the text, as texture rather than
+   a chart — no axes, no ticks, just the shape of the series. */
+.metric-spark {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 42px;
+  pointer-events: none;
+  opacity: 0.55;
+}
+
+.metric-card.tier-hero .metric-spark { height: 54px; }
+
+.metric-spark svg { display: block; width: 100%; height: 100%; }
 
 /* ── Charts ─────────────────────────────────────────────────────────────── */
 .charts-row {
