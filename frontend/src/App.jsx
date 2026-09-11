@@ -20,7 +20,7 @@ export default function App() {
   const [pricesLoading, setPricesLoading] = useState(false)
   const [spyData,        setSpyData]        = useState({})
   const [indexPrices,    setIndexPrices]    = useState({})
-  const [indexHistory,   setIndexHistory]   = useState({ VOO: {}, QQQ: {} })
+  const [indexHistory,   setIndexHistory]   = useState({ RSP: {}, QQQ: {} })
   const [holdingsHistory, setHoldingsHistory] = useState({})
   const [allContributions, setAllContributions] = useState([])
   const [allIncomeLogs,    setAllIncomeLogs]    = useState([])
@@ -243,7 +243,7 @@ export default function App() {
       .catch(() => {})
   }, [])
 
-  // Fetch benchmark history (SPY/VOO/QQQ) from the earliest contribution date
+  // Fetch benchmark history (SPY/RSP/QQQ) from the earliest contribution date
   // across ALL accounts — a superset range serves every account view, so this
   // runs once rather than on every account switch.
   // adjusted=1 gives the dividend-adjusted series, so the benchmark earns total
@@ -254,14 +254,14 @@ export default function App() {
     fetch(`/market/sparkdata?symbol=SPY&start=${start}&adjusted=1`)
       .then(r => r.json()).then(d => setSpyData(d)).catch(() => {})
     Promise.all([
-      fetch('/market/prices?symbols=SPY,VOO,QQQ').then(r => r.json()),
-      fetch(`/market/sparkdata?symbol=VOO&start=${start}&adjusted=1`).then(r => r.json()),
+      fetch('/market/prices?symbols=SPY,RSP,QQQ').then(r => r.json()),
+      fetch(`/market/sparkdata?symbol=RSP&start=${start}&adjusted=1`).then(r => r.json()),
       fetch(`/market/sparkdata?symbol=QQQ&start=${start}&adjusted=1`).then(r => r.json()),
-    ]).then(([idxPrices, vooHist, qqqHist]) => {
+    ]).then(([idxPrices, rspHist, qqqHist]) => {
       const flat = {}
       Object.entries(idxPrices).forEach(([sym, info]) => { if (info?.price != null) flat[sym] = info.price })
       setIndexPrices(flat)
-      setIndexHistory({ VOO: vooHist, QQQ: qqqHist })
+      setIndexHistory({ RSP: rspHist, QQQ: qqqHist })
     }).catch(() => {})
   }, [allContributions])
 

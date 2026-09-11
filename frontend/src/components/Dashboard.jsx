@@ -280,7 +280,7 @@ function TopTradesTable({ trades, variant }) {
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
-export default function Dashboard({ account = 'ira', trades, spyData = {}, indexPrices = {}, indexHistory = { VOO: {}, QQQ: {} }, holdingsHistory = {}, contributions = [], positions = [], prices = {}, incomeLogs = [] }) {
+export default function Dashboard({ account = 'ira', trades, spyData = {}, indexPrices = {}, indexHistory = { RSP: {}, QQQ: {} }, holdingsHistory = {}, contributions = [], positions = [], prices = {}, incomeLogs = [] }) {
   const [modal, setModal] = useState(null)
   // Benchmark timing: unclamped buys the index on each contribution date ("what if
   // I'd indexed every deposit"); clamped defers pre-first-trade deposits to the
@@ -744,7 +744,7 @@ export default function Dashboard({ account = 'ira', trades, spyData = {}, index
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
           {[
             { sym: 'SPY', history: spyData },
-            { sym: 'VOO', history: indexHistory.VOO },
+            { sym: 'RSP', history: indexHistory.RSP },
             { sym: 'QQQ', history: indexHistory.QQQ },
           ].map(({ sym, history }) => {
             const price    = indexPrices[sym]

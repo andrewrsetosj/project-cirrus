@@ -1063,7 +1063,10 @@ def market_dailycloses():
     return jsonify(closes_for(symbols, start, as_traded=True))
 
 
-BENCHMARKS = ('SPY', 'VOO', 'QQQ')
+# SPY is the cap-weighted baseline and the anchor for beta/vol/drawdown; RSP is
+# the same 500 names equal-weighted, so the SPY-RSP spread reads market breadth;
+# QQQ is the large-cap tech tilt.
+BENCHMARKS = ('SPY', 'RSP', 'QQQ')
 
 
 @app.get('/analytics/timeseries')

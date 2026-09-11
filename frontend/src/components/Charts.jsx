@@ -92,7 +92,7 @@ const dim = (hex, alpha) => {
 // ── Equity Curve ─────────────────────────────────────────────────────────────
 export const INDEX_COLORS = {
   SPY: '#bd7042',  // muted clay
-  VOO: '#3f9a6e',  // muted sage
+  RSP: '#3f9a6e',  // muted sage
   QQQ: '#7f6fbd',  // muted lavender
 }
 
@@ -220,7 +220,7 @@ export function EquityCurve({ account = 'ira', trades, spyData = {}, contributio
   const fundDatasets = sorted.length && contributions.length
     ? [
         { sym: 'SPY', history: spyData },
-        { sym: 'VOO', history: indexHistory.VOO ?? {} },
+        { sym: 'RSP', history: indexHistory.RSP ?? {} },
         { sym: 'QQQ', history: indexHistory.QQQ ?? {} },
       ].flatMap(({ sym, history }) => {
         const line = buildFundLine(history, contributions, sorted, firstInvestDate, clamped)

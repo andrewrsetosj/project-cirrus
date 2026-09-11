@@ -11,11 +11,13 @@ DAYS = ['2026-01-02', '2026-01-05', '2026-01-06', '2026-01-07']
 
 @pytest.fixture
 def stub_market(app_module, monkeypatch):
-    """Give SPY/VOO/QQQ a flat 100 and the holding a doubling price."""
+    """Give every benchmark a flat 100 and the holding a doubling price."""
     def fake_closes(symbols, start, adjusted=False, as_traded=False):
         out = {}
         for sym in symbols:
-            if sym in ('SPY', 'VOO', 'QQQ'):
+            # read from BENCHMARKS so swapping a benchmark can't silently
+            # leave one of these series empty
+            if sym in app_module.BENCHMARKS:
                 out[sym] = {d: 100.0 for d in DAYS}
             elif sym == 'X':
                 out[sym] = dict(zip(DAYS, [10.0, 10.0, 15.0, 20.0]))
