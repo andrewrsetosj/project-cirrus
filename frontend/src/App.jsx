@@ -147,6 +147,16 @@ export default function App() {
     return (await res.json()).error || 'Failed to close position.'
   }
 
+  // Sell a share quantity of one symbol; the server spans as many lots as it
+  // takes, in one transaction.
+  const sellSymbol = async (data) => {
+    const res = await fetch('/positions/sell', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+    })
+    if (res.ok) { await Promise.all([fetchTrades(), fetchPositions()]); return null }
+    return (await res.json()).error || 'Failed to sell position.'
+  }
+
   // ── Checkpoints ────────────────────────────────────────────────────────────
 
   const [checkpoints,   setCheckpoints]   = useState([])
@@ -291,7 +301,7 @@ export default function App() {
           <Positions
             positions={positions} prices={prices} pricesLoading={pricesLoading}
             onRefreshPrices={refreshPrices} onAdd={combined ? null : addPosition} onUpdate={updatePosition}
-            onDelete={deletePosition} onClose={closePosition}
+            onDelete={deletePosition} onClose={closePosition} onSell={sellSymbol}
           />
           </>
         )}

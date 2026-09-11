@@ -66,3 +66,17 @@ def sell(client):
             body['shares'] = str(shares)
         return client.post(f'/positions/{pos_id}/close', json=body)
     return _sell
+
+
+@pytest.fixture
+def sell_symbol(client):
+    def _sell(symbol='PANW', shares='10', total_sell='1100',
+              close_date='2026-03-01', account=None, method=None):
+        body = {'symbol': symbol, 'shares': str(shares),
+                'total_sell': str(total_sell), 'close_date': close_date}
+        if account is not None:
+            body['account'] = account
+        if method is not None:
+            body['method'] = method
+        return client.post('/positions/sell', json=body)
+    return _sell

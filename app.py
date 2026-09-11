@@ -328,6 +328,139 @@ def delete_position(pos_id):
     return '', 204
 
 
+LOT_METHODS = ('fifo', 'lifo')
+
+
+def _consume_lot(conn, pos, sell_shares, close_date, total_sell):
+    """Sell `sell_shares` out of one open lot: write the realized trade row, then
+    shrink the lot or delete it if nothing is left. Caller owns the commit.
+
+    Cost basis for the sold shares is allocated proportionally (average cost),
+    snapped to whole cents. The remainder left on the lot is computed as
+    total - allocated rather than re-derived, so the two always sum back to the
+    original basis and repeated partial sells cannot drift.
+    """
+    allocated_buy = round(pos['total_buy'] * sell_shares / pos['shares'], MONEY_DP)
+
+    cur = conn.execute(
+        'INSERT INTO trades (symbol, open_date, close_date, shares, total_buy, total_sell, account) VALUES (?,?,?,?,?,?,?)',
+        (pos['symbol'], pos['open_date'], close_date,
+         sell_shares, allocated_buy, total_sell, pos.get('account', 'ira'))
+    )
+
+    remaining_shares = round(pos['shares'] - sell_shares, SHARE_DP)
+    if remaining_shares <= SHARE_EPS:
+        conn.execute('DELETE FROM open_positions WHERE id = ?', (pos['id'],))
+    else:
+        conn.execute(
+            'UPDATE open_positions SET shares = ?, total_buy = ? WHERE id = ?',
+            (remaining_shares, round(pos['total_buy'] - allocated_buy, MONEY_DP), pos['id'])
+        )
+    return cur.lastrowid
+
+
+def _allocate_lots(lots, sell_shares, total_sell):
+    """Match `sell_shares` against `lots` in order, returning [(lot, shares, proceeds)].
+
+    Proceeds are split pro-rata by shares taken, with the final lot absorbing the
+    rounding residual so the per-lot amounts always sum back to exactly
+    `total_sell` instead of landing a cent off.
+    """
+    picks = []
+    remaining = sell_shares
+    for lot in lots:
+        if remaining <= SHARE_EPS:
+            break
+        take = min(remaining, lot['shares'])
+        # A lot left holding less than SHARE_EPS could never be sold afterwards,
+        # so absorb the sliver into this sale rather than stranding it.
+        if lot['shares'] - take <= SHARE_EPS:
+            take = lot['shares']
+        take = round(take, SHARE_DP)
+        picks.append((lot, take))
+        remaining = round(remaining - take, SHARE_DP)
+
+    taken = round(sum(t for _, t in picks), SHARE_DP)
+    out, allocated = [], 0.0
+    for idx, (lot, take) in enumerate(picks):
+        if idx == len(picks) - 1:
+            amount = round(total_sell - allocated, MONEY_DP)
+        else:
+            amount = round(total_sell * take / taken, MONEY_DP)
+            allocated = round(allocated + amount, MONEY_DP)
+        out.append((lot, take, amount))
+    return out
+
+
+@app.post('/positions/sell')
+def sell_symbol():
+    """Sell a share quantity of one symbol, spanning as many lots as it takes.
+
+    The single-lot endpoint below can only sell what one lot holds, so a sale of
+    17 shares split across a 13.46-share lot and a 3.91-share lot had no way to
+    be recorded. Lots are matched in `method` order (FIFO default) and each one
+    consumed writes its own trade row, preserving that lot's open_date so
+    days-held and CAGR stay correct per lot. The whole fan-out is one
+    transaction, so a failure part-way cannot leave the ledger half-closed.
+    """
+    data = request.get_json(silent=True) or {}
+    required = ('symbol', 'close_date', 'shares', 'total_sell')
+    missing = [f for f in required if f not in data or data[f] == '']
+    if missing:
+        return jsonify({'error': f'Missing fields: {", ".join(missing)}'}), 400
+
+    method = (data.get('method') or 'fifo').lower()
+    if method not in LOT_METHODS:
+        return jsonify({'error': f'method must be one of: {", ".join(LOT_METHODS)}'}), 400
+
+    try:
+        sell_shares = parse_shares(data['shares'])
+        total_sell = parse_money(data['total_sell'])
+    except (TypeError, ValueError):
+        return jsonify({'error': 'shares and total_sell must be numbers'}), 400
+    if sell_shares <= 0:
+        return jsonify({'error': 'shares must be greater than 0'}), 400
+
+    symbol = data['symbol'].upper()
+    acct = (data.get('account') or '').lower()
+
+    conn = get_db()
+    # Oldest lot first; id breaks ties between lots opened the same day.
+    if acct in ACCOUNTS:
+        rows = conn.execute(
+            'SELECT * FROM open_positions WHERE symbol = ? AND account = ? ORDER BY open_date ASC, id ASC',
+            (symbol, acct)).fetchall()
+    else:
+        rows = conn.execute(
+            'SELECT * FROM open_positions WHERE symbol = ? ORDER BY open_date ASC, id ASC',
+            (symbol,)).fetchall()
+    lots = [dict(r) for r in rows]
+    if not lots:
+        conn.close()
+        return jsonify({'error': f'No open {symbol} position'}), 404
+    if method == 'lifo':
+        lots.reverse()
+
+    # Compare with tolerance: share counts are floats, so a total held that lands
+    # at 17.369999999999997 must still accept a sell of 17.37.
+    held = round(sum(lot['shares'] for lot in lots), SHARE_DP)
+    if sell_shares - held > SHARE_EPS:
+        conn.close()
+        return jsonify({'error': f'{symbol} has only {held} shares open'}), 400
+    sell_shares = min(sell_shares, held)
+
+    trade_ids = [
+        _consume_lot(conn, lot, take, data['close_date'], amount)
+        for lot, take, amount in _allocate_lots(lots, sell_shares, total_sell)
+    ]
+    conn.commit()
+    placeholders = ','.join('?' * len(trade_ids))
+    trades = [dict(r) for r in conn.execute(
+        f'SELECT * FROM trades WHERE id IN ({placeholders}) ORDER BY id ASC', trade_ids)]
+    conn.close()
+    return jsonify(trades), 201
+
+
 @app.post('/positions/<int:pos_id>/close')
 def close_position(pos_id):
     data = request.get_json(silent=True) or {}
@@ -359,28 +492,7 @@ def close_position(pos_id):
             return jsonify({'error': f'shares must be between 1 and {pos["shares"]}'}), 400
         sell_shares = min(sell_shares, pos['shares'])
 
-    # Cost basis for the sold shares is allocated proportionally (average cost),
-    # snapped to whole cents. The remainder left on the position is computed as
-    # total - allocated rather than re-derived, so the two always sum back to the
-    # original basis and repeated partial sells cannot drift.
-    allocated_buy = round(pos['total_buy'] * sell_shares / pos['shares'], MONEY_DP)
-
-    cur = conn.execute(
-        'INSERT INTO trades (symbol, open_date, close_date, shares, total_buy, total_sell, account) VALUES (?,?,?,?,?,?,?)',
-        (pos['symbol'], pos['open_date'], data['close_date'],
-         sell_shares, allocated_buy, parse_money(data['total_sell']),
-         pos.get('account', 'ira'))
-    )
-    trade_id = cur.lastrowid
-
-    remaining_shares = round(pos['shares'] - sell_shares, SHARE_DP)
-    if remaining_shares <= SHARE_EPS:
-        conn.execute('DELETE FROM open_positions WHERE id = ?', (pos_id,))
-    else:
-        conn.execute(
-            'UPDATE open_positions SET shares = ?, total_buy = ? WHERE id = ?',
-            (remaining_shares, round(pos['total_buy'] - allocated_buy, MONEY_DP), pos_id)
-        )
+    trade_id = _consume_lot(conn, pos, sell_shares, data['close_date'], parse_money(data['total_sell']))
     conn.commit()
     trade = conn.execute('SELECT * FROM trades WHERE id = ?', (trade_id,)).fetchone()
     conn.close()

@@ -145,8 +145,7 @@ function CloseFormRow({ position, colSpan, onClose, onCancel }) {
 
   // Share counts are floats, so compare with a tolerance: selling 0.972 out of a
   // position stored as 0.9719999999999995 is a full close, not an overflow.
-  const SHARE_EPS   = 1e-8
-  const maxShares   = Math.round(position.shares * 1e8) / 1e8
+  const maxShares   = r8(position.shares)
   const sellShares  = parseFloat(shares) || 0
   const isPartial   = sellShares > 0 && maxShares - sellShares > SHARE_EPS
   const remaining   = Math.round((position.shares - sellShares) * 1e6) / 1e6
@@ -199,45 +198,91 @@ function CloseFormRow({ position, colSpan, onClose, onCancel }) {
   )
 }
 
-// ── Close All Positions inline form ──────────────────────────────────────────
+// ── Sell (multi-lot) inline form ─────────────────────────────────────────────
 
-function CloseAllFormRow({ positions, colSpan, onClose, onDone, onCancel }) {
-  const [closeDate, setCloseDate] = useState(todayStr())
-  const [totalSell, setTotalSell] = useState('')
-  const [error, setError]         = useState('')
-  const [loading, setLoading]     = useState(false)
+const SHARE_EPS = 1e-8
+const r8 = n => Math.round(n * 1e8) / 1e8
 
-  const totalShares = positions.reduce((s, p) => s + p.shares, 0)
-  const total       = parseFloat(totalSell) || 0
-
-  const splits = positions.map((p, i) => {
-    if (i === positions.length - 1) {
-      const allocated = positions.slice(0, -1).reduce((s, pp) => s + r2(total * (pp.shares / totalShares)), 0)
-      return { ...p, sellAmt: r2(total - allocated) }
+// Mirrors _allocate_lots() in app.py so the preview matches what the server will
+// actually write. Lots come in oldest-first; LIFO just walks them backwards.
+function allocateLots(lots, sellShares, totalSell, method) {
+  const ordered = method === 'lifo' ? [...lots].reverse() : lots
+  const picks = []
+  let remaining = sellShares
+  for (const lot of ordered) {
+    if (remaining <= SHARE_EPS) break
+    let take = Math.min(remaining, lot.shares)
+    if (lot.shares - take <= SHARE_EPS) take = lot.shares
+    take = r8(take)
+    picks.push({ lot, take })
+    remaining = r8(remaining - take)
+  }
+  const taken = r8(picks.reduce((s, p) => s + p.take, 0))
+  let allocated = 0
+  return picks.map(({ lot, take }, idx) => {
+    let amount
+    if (idx === picks.length - 1) {
+      amount = r2(totalSell - allocated)
+    } else {
+      amount = r2(totalSell * take / taken)
+      allocated = r2(allocated + amount)
     }
-    return { ...p, sellAmt: r2(total * (p.shares / totalShares)) }
+    return { lot, take, amount }
   })
+}
+
+function SellFormRow({ positions, colSpan, onSell, onCancel }) {
+  const totalShares = r8(positions.reduce((s, p) => s + p.shares, 0))
+
+  const [closeDate, setCloseDate] = useState(todayStr())
+  const [shares,    setShares]    = useState(String(totalShares))
+  const [totalSell, setTotalSell] = useState('')
+  const [method,    setMethod]    = useState('fifo')
+  const [error,     setError]     = useState('')
+  const [loading,   setLoading]   = useState(false)
+
+  const sellShares = parseFloat(shares) || 0
+  const proceeds   = parseFloat(totalSell) || 0
+  const valid      = sellShares > 0 && sellShares - totalShares <= SHARE_EPS
+  const splits     = valid && proceeds > 0 ? allocateLots(positions, Math.min(sellShares, totalShares), proceeds, method) : []
+  const remaining  = r8(totalShares - sellShares)
 
   const handleSubmit = async e => {
     e.preventDefault()
     setError('')
-    setLoading(true)
-    for (const p of splits) {
-      const err = await onClose(p.id, { close_date: closeDate, total_sell: String(p.sellAmt) })
-      if (err) { setError(err); setLoading(false); return }
+    if (!valid) {
+      setError(`Shares must be between 0 and ${totalShares}`)
+      return
     }
+    setLoading(true)
+    const err = await onSell({
+      symbol:     positions[0].symbol,
+      account:    positions[0].account ?? 'ira',
+      close_date: closeDate,
+      shares:     sellShares,
+      total_sell: totalSell,
+      method,
+    })
     setLoading(false)
-    onDone()
+    if (err) setError(err)
   }
 
   return (
     <tr className="close-form-row">
       <td colSpan={colSpan}>
         <form className="inline-close-form" onSubmit={handleSubmit}>
-          <span className="close-form-sym">Close All <strong>{positions[0].symbol}</strong></span>
+          <span className="close-form-sym">Sell <strong>{positions[0].symbol}</strong></span>
           <div className="close-form-field">
             <label>Close Date</label>
             <DatePicker value={closeDate} onChange={setCloseDate} required />
+          </div>
+          <div className="close-form-field">
+            <label>Shares to Sell</label>
+            <input
+              type="number" step="any" min="0.000001" max={totalShares} className="form-input"
+              style={{ width: 96 }} placeholder={String(totalShares)} value={shares}
+              onChange={e => setShares(e.target.value)} required
+            />
           </div>
           <div className="close-form-field">
             <label>Total Proceeds $</label>
@@ -247,18 +292,26 @@ function CloseAllFormRow({ positions, colSpan, onClose, onDone, onCancel }) {
               onChange={e => setTotalSell(e.target.value)} required
             />
           </div>
-          {total > 0 && (
-            <div style={{ display: 'flex', gap: 14, fontSize: 11, color: 'var(--t2)', alignItems: 'center' }}>
-              {splits.map(p => (
-                <span key={p.id}>
-                  #{p.id} ({p.shares} sh): <span style={{ color: 'var(--t1)' }}>{fmtDollar(p.sellAmt)}</span>
+          <div className="close-form-field">
+            <label>Lot Order</label>
+            <select className="form-input" style={{ width: 88 }} value={method} onChange={e => setMethod(e.target.value)}>
+              <option value="fifo">FIFO</option>
+              <option value="lifo">LIFO</option>
+            </select>
+          </div>
+          {splits.length > 0 && (
+            <div style={{ display: 'flex', gap: 14, fontSize: 11, color: 'var(--t2)', alignItems: 'center', flexWrap: 'wrap' }}>
+              {splits.map(({ lot, take, amount }) => (
+                <span key={lot.id}>
+                  #{lot.id} ({take} of {lot.shares} sh): <span style={{ color: 'var(--t1)' }}>{fmtDollar(amount)}</span>
                 </span>
               ))}
+              {remaining > SHARE_EPS && <span>{remaining} sh will remain open</span>}
             </div>
           )}
           {error && <span className="form-error">{error}</span>}
           <button type="submit" className="btn btn-primary" disabled={loading} style={{ padding: '6px 14px', fontSize: 11 }}>
-            {loading ? 'Closing…' : `Confirm Close All (${positions.length} lots)`}
+            {loading ? 'Selling…' : `Confirm Sell (${splits.length || positions.length} lot${(splits.length || positions.length) === 1 ? '' : 's'})`}
           </button>
           <button type="button" className="btn btn-ghost" style={{ padding: '6px 12px', fontSize: 11 }} onClick={onCancel}>Cancel</button>
         </form>
@@ -308,22 +361,25 @@ function SummaryBar({ positions }) {
 
 const COLS = 13   // number of visible columns before the action column
 
-export default function Positions({ positions, prices, pricesLoading, onRefreshPrices, onAdd, onDelete, onClose, onUpdate }) {
+export default function Positions({ positions, prices, pricesLoading, onRefreshPrices, onAdd, onDelete, onClose, onSell, onUpdate }) {
   const [formOpen,        setFormOpen]        = useState(false)
   const [closingId,       setClosingId]       = useState(null)
   const [editingId,       setEditingId]       = useState(null)
   const [confirmDel,      setConfirmDel]      = useState(null)
-  const [closingAllSymbol, setClosingAllSymbol] = useState(null)
+  const [sellingKey,      setSellingKey]      = useState(null)
 
   const enriched = positions.map(p => enrichPosition(p, prices))
 
-  // Group enriched positions by symbol
+  // Group lots by symbol *and* account: in the combined "all" view the same
+  // symbol can sit in both accounts, and FIFO matching across them would be wrong.
+  const groupKey = p => `${p.symbol}|${p.account ?? 'ira'}`
   const symbolGroups = {}
   enriched.forEach(p => {
-    if (!symbolGroups[p.symbol]) symbolGroups[p.symbol] = []
-    symbolGroups[p.symbol].push(p)
+    const k = groupKey(p)
+    if (!symbolGroups[k]) symbolGroups[k] = []
+    symbolGroups[k].push(p)
   })
-  const multiSymbols   = new Set(Object.keys(symbolGroups).filter(s => symbolGroups[s].length > 1))
+  const multiKeys = new Set(Object.keys(symbolGroups).filter(k => symbolGroups[k].length > 1))
   const lastOfMultiGroup = new Set(
     Object.values(symbolGroups).filter(g => g.length > 1).map(g => g[g.length - 1].id)
   )
@@ -346,7 +402,13 @@ export default function Positions({ positions, prices, pricesLoading, onRefreshP
   }
 
   const handleEdit = id => {
-    setEditingId(id); setClosingId(null); setConfirmDel(null); setClosingAllSymbol(null)
+    setEditingId(id); setClosingId(null); setConfirmDel(null); setSellingKey(null)
+  }
+
+  const handleSell = async data => {
+    const err = await onSell(data)
+    if (!err) setSellingKey(null)
+    return err
   }
 
   return (
@@ -408,8 +470,9 @@ export default function Positions({ positions, prices, pricesLoading, onRefreshP
             )}
             {enriched.map(p => {
               const plCls   = p.unr_pl == null ? '' : p.unr_pl >= 0 ? 'cell-gain' : 'cell-loss'
-              const dimmed  = editingId === p.id || closingId === p.id || closingAllSymbol === p.symbol
-              const isMulti = multiSymbols.has(p.symbol)
+              const key     = groupKey(p)
+              const dimmed  = editingId === p.id || closingId === p.id || sellingKey === key
+              const isMulti = multiKeys.has(key)
               return (
                 <React.Fragment key={p.id}>
                   <tr style={{ opacity: dimmed ? 0.4 : 1 }}>
@@ -432,8 +495,8 @@ export default function Positions({ positions, prices, pricesLoading, onRefreshP
                         <button className="btn-del" onClick={() => setEditingId(null)}>Cancel</button>
                       ) : closingId === p.id ? (
                         <button className="btn-del" onClick={() => setClosingId(null)}>Cancel</button>
-                      ) : closingAllSymbol === p.symbol ? (
-                        <button className="btn-del" onClick={() => setClosingAllSymbol(null)}>Cancel</button>
+                      ) : sellingKey === key ? (
+                        <button className="btn-del" onClick={() => setSellingKey(null)}>Cancel</button>
                       ) : confirmDel === p.id ? (
                         <span style={{ display: 'inline-flex', gap: 4 }}>
                           <button className="btn-del btn-del-armed" onClick={() => handleDelete(p.id)}>CONFIRM</button>
@@ -443,13 +506,13 @@ export default function Positions({ positions, prices, pricesLoading, onRefreshP
                         <span style={{ display: 'inline-flex', gap: 5 }}>
                           <button className="btn-del btn-edit" onClick={() => handleEdit(p.id)}>Edit</button>
                           <button className="btn-del" style={{ color: '#00c8e1' }}
-                            onClick={() => { setClosingId(p.id); setEditingId(null); setConfirmDel(null); setClosingAllSymbol(null) }}>
+                            onClick={() => { setClosingId(p.id); setEditingId(null); setConfirmDel(null); setSellingKey(null) }}>
                             Close
                           </button>
                           {isMulti && (
                             <button className="btn-del" style={{ color: '#00c8e1' }}
-                              onClick={() => { setClosingAllSymbol(p.symbol); setClosingId(null); setEditingId(null); setConfirmDel(null) }}>
-                              Close All
+                              onClick={() => { setSellingKey(key); setClosingId(null); setEditingId(null); setConfirmDel(null) }}>
+                              Sell
                             </button>
                           )}
                           <button className="btn-del" onClick={() => handleDelete(p.id)}>✕</button>
@@ -473,13 +536,12 @@ export default function Positions({ positions, prices, pricesLoading, onRefreshP
                       onCancel={() => setClosingId(null)}
                     />
                   )}
-                  {lastOfMultiGroup.has(p.id) && closingAllSymbol === p.symbol && (
-                    <CloseAllFormRow
-                      positions={symbolGroups[p.symbol]}
+                  {lastOfMultiGroup.has(p.id) && sellingKey === key && (
+                    <SellFormRow
+                      positions={symbolGroups[key]}
                       colSpan={COLS + 1}
-                      onClose={onClose}
-                      onDone={() => setClosingAllSymbol(null)}
-                      onCancel={() => setClosingAllSymbol(null)}
+                      onSell={handleSell}
+                      onCancel={() => setSellingKey(null)}
                     />
                   )}
                 </React.Fragment>
