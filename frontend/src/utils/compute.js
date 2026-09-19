@@ -1,5 +1,10 @@
 export const r2 = n => Math.round(n * 100) / 100
 
+// Compounding a few days of return out to a full year produces nonsense (a
+// 1-day 11% gain annualizes to 1e18%), so CAGR is withheld on short holds.
+// Mirrors MIN_DAYS_TO_ANNUALIZE in analytics.py.
+export const MIN_DAYS_TO_ANNUALIZE = 30
+
 export function xirr(cashflows) {
   // cashflows: [{date: 'YYYY-MM-DD', amount: number}, ...]
   // contributions = negative amounts (money going in), current value = positive
@@ -45,7 +50,9 @@ export function computeFields(t) {
   t.performance = t.net / t.total_buy
 
   if (t.days_held > 0) {
-    t.cagr           = Math.pow(t.total_sell / t.total_buy, 365 / t.days_held) - 1
+    t.cagr           = t.days_held >= MIN_DAYS_TO_ANNUALIZE
+      ? Math.pow(t.total_sell / t.total_buy, 365 / t.days_held) - 1
+      : null
     t.day_pct_change = t.performance / t.days_held
     t.rot            = r2(t.net / t.days_held)
   } else {

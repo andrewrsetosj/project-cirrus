@@ -19,14 +19,14 @@ function SymbolTable({ trades }) {
 
   const map = {}
   trades.forEach(t => {
-    if (!map[t.symbol]) map[t.symbol] = { trades: 0, totalPL: 0, totalDays: 0, cagrSum: 0, cagrCount: 0, totalSell: 0, totalShares: 0, rows: [] }
+    if (!map[t.symbol]) map[t.symbol] = { trades: 0, totalPL: 0, totalDays: 0, dollarDays: 0, totalSell: 0, totalShares: 0, rows: [] }
     const s = map[t.symbol]
     s.trades++
     s.totalPL      = r2(s.totalPL + t.net)
     s.totalDays   += t.days_held
     s.totalSell   += t.total_sell
     s.totalShares += t.shares
-    if (t.cagr != null) { s.cagrSum += t.cagr; s.cagrCount++ }
+    s.dollarDays  += t.total_buy * t.days_held
     s.rows.push(t)
   })
 
@@ -38,7 +38,7 @@ function SymbolTable({ trades }) {
       totalPL: s.totalPL,
       avgPL: r2(s.totalPL / s.trades),
       avgDays: Math.round(s.totalDays / s.trades),
-      avgCagr: s.cagrCount ? s.cagrSum / s.cagrCount : null,
+      roc: s.dollarDays > 0 ? (s.totalPL / s.dollarDays) * 365 : null,
       rows: s.rows.sort((a, b) => a.open_date.localeCompare(b.open_date)),
     }))
     .sort((a, b) => b.totalPL - a.totalPL)
@@ -54,7 +54,7 @@ function SymbolTable({ trades }) {
             <th className="r">Total P&amp;L</th>
             <th className="r">Avg P&amp;L</th>
             <th className="r">Avg Days</th>
-            <th className="r">Avg CAGR</th>
+            <th className="r">RoC /yr</th>
           </tr>
         </thead>
         <tbody>
@@ -79,7 +79,7 @@ function SymbolTable({ trades }) {
                 <td className={`r num-cell ${r.totalPL >= 0 ? 'gain-cell' : 'loss-cell'}`}>{fmtDollar(r.totalPL)}</td>
                 <td className={`r num-cell ${r.avgPL   >= 0 ? 'gain-cell' : 'loss-cell'}`}>{fmtDollar(r.avgPL)}</td>
                 <td className="r num-cell muted-cell">{r.avgDays}</td>
-                <td className="r num-cell muted-cell">{r.avgCagr != null ? fmtPct(r.avgCagr, 1) : '—'}</td>
+                <td className="r num-cell muted-cell">{r.roc != null ? fmtPct(r.roc, 1) : '—'}</td>
               </tr>
               {expanded.has(r.sym) && (
                 <tr>
@@ -184,7 +184,7 @@ const CAT_ORDER = ['Day', 'Swing', 'Position', 'Long-term']
 
 function DurationTable({ trades }) {
   const map = {}
-  CAT_ORDER.forEach(c => { map[c] = { trades: 0, wins: 0, totalPL: 0, cagrSum: 0, cagrCount: 0, totalDays: 0 } })
+  CAT_ORDER.forEach(c => { map[c] = { trades: 0, wins: 0, totalPL: 0, dollarDays: 0, totalDays: 0 } })
   trades.forEach(t => {
     const s = map[t.category]
     if (!s) return
@@ -192,7 +192,7 @@ function DurationTable({ trades }) {
     if (t.net > 0) s.wins++
     s.totalPL    = r2(s.totalPL + t.net)
     s.totalDays += t.days_held
-    if (t.cagr != null) { s.cagrSum += t.cagr; s.cagrCount++ }
+    s.dollarDays += t.total_buy * t.days_held
   })
 
   return (
@@ -206,7 +206,7 @@ function DurationTable({ trades }) {
             <th className="r">Total P&amp;L</th>
             <th className="r">Avg P&amp;L</th>
             <th className="r">Avg Days</th>
-            <th className="r">Avg CAGR</th>
+            <th className="r">RoC /yr</th>
           </tr>
         </thead>
         <tbody>
@@ -222,7 +222,7 @@ function DurationTable({ trades }) {
             const winRate = s.wins / s.trades
             const avgPL   = r2(s.totalPL / s.trades)
             const avgDays = Math.round(s.totalDays / s.trades)
-            const avgCagr = s.cagrCount ? s.cagrSum / s.cagrCount : null
+            const roc = s.dollarDays > 0 ? (s.totalPL / s.dollarDays) * 365 : null
             return (
               <tr key={cat}>
                 <td className="sym-cell" style={{ fontFamily: 'var(--sans)', fontWeight: 500 }}>{cat}</td>
@@ -231,7 +231,7 @@ function DurationTable({ trades }) {
                 <td className={`r num-cell ${s.totalPL >= 0 ? 'gain-cell' : 'loss-cell'}`}>{fmtDollar(s.totalPL)}</td>
                 <td className={`r num-cell ${avgPL >= 0 ? 'gain-cell' : 'loss-cell'}`}>{fmtDollar(avgPL)}</td>
                 <td className="r num-cell muted-cell">{avgDays}</td>
-                <td className="r num-cell muted-cell">{avgCagr != null ? fmtPct(avgCagr, 1) : '—'}</td>
+                <td className="r num-cell muted-cell">{roc != null ? fmtPct(roc, 1) : '—'}</td>
               </tr>
             )
           })}

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import SymbolInput from './SymbolInput'
 import DatePicker from './DatePicker'
-import { r2 } from '../utils/compute'
+import { r2, MIN_DAYS_TO_ANNUALIZE } from '../utils/compute'
 import { fmtDollar, fmtPct } from '../utils/format'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -22,7 +22,9 @@ function enrichPosition(p, prices) {
   const mkt_value   = price != null ? r2(price * p.shares) : null
   const unr_pl      = price != null ? r2(mkt_value - p.total_buy) : null
   const unr_pct     = price != null && p.total_buy > 0 ? unr_pl / p.total_buy : null
-  const cagr        = price != null && days > 0 ? Math.pow(price / buy_per_sh, 365 / days) - 1 : null
+  const cagr        = price != null && days >= MIN_DAYS_TO_ANNUALIZE
+    ? Math.pow(price / buy_per_sh, 365 / days) - 1
+    : null
   return { ...p, buy_per_sh, days, price, mkt_value, unr_pl, unr_pct, cagr }
 }
 
