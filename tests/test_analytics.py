@@ -96,6 +96,21 @@ def test_realized_gain_lands_on_close_date():
     assert [r['value'] for r in s] == [100.0, 100.0, 130.0, 130.0]
 
 
+def test_off_calendar_cash_events_roll_to_next_trading_day():
+    # 2026-01-03 is a Saturday; DAYS skips straight to Monday the 5th.
+    trades = [{'symbol': 'X', 'open_date': '2026-01-02', 'close_date': '2026-01-03',
+               'shares': 10, 'total_buy': 100.0, 'total_sell': 130.0}]
+    contributions = [{'date': '2026-01-02', 'amount': 100.0},
+                     {'date': '2026-01-04', 'amount': 50.0}]
+    income = [{'date': '2026-01-03', 'amount': 5.0}]
+    prices = {'X': {d: 10.0 for d in DAYS}}
+    s = an.build_daily_series(DAYS, [], trades, contributions, income, prices)
+
+    assert [r['realized'] for r in s] == [0.0, 30.0, 30.0, 30.0]
+    assert [r['flow'] for r in s] == [100.0, 50.0, 0.0, 0.0]
+    assert [r['value'] for r in s] == [100.0, 185.0, 185.0, 185.0]
+
+
 def test_unpriced_holding_is_carried_at_cost_not_dropped():
     positions = [{'symbol': 'MISSING', 'open_date': '2026-01-02', 'shares': 5, 'total_buy': 250.0}]
     s = an.build_daily_series(DAYS, positions, [], [{'date': '2026-01-02', 'amount': 250.0}], [], {})

@@ -12,6 +12,7 @@ flow, so deposits neither create nor destroy apparent performance. That is the
 number that answers "how good is my stock picking", as opposed to XIRR, which
 answers "how did my money actually do, deposit timing included".
 """
+from bisect import bisect_left
 from math import sqrt
 
 TRADING_DAYS = 252
@@ -81,14 +82,24 @@ def build_daily_series(days, positions, trades, contributions, income, prices):
     days = sorted(days)
     filled = {sym: forward_filled(hist, days) for sym, hist in prices.items()}
 
+    # Cash events dated off the market calendar (weekends, holidays) land on the
+    # next trading day; keyed by their own date they would never be counted.
+    def on_calendar(date):
+        i = bisect_left(days, date)
+        return days[i] if i < len(days) else None
+
     contrib_by_day, income_by_day, realized_by_day = {}, {}, {}
+    def book(by_day, date, amount):
+        day = on_calendar(date)
+        if day is not None:
+            by_day[day] = by_day.get(day, 0.0) + amount
+
     for c in contributions:
-        contrib_by_day[c['date']] = contrib_by_day.get(c['date'], 0.0) + c['amount']
+        book(contrib_by_day, c['date'], c['amount'])
     for e in income:
-        income_by_day[e['date']] = income_by_day.get(e['date'], 0.0) + e['amount']
+        book(income_by_day, e['date'], e['amount'])
     for t in trades:
-        gain = t['total_sell'] - t['total_buy']
-        realized_by_day[t['close_date']] = realized_by_day.get(t['close_date'], 0.0) + gain
+        book(realized_by_day, t['close_date'], t['total_sell'] - t['total_buy'])
 
     series = []
     contributed = realized = earned = 0.0

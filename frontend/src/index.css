@@ -1418,3 +1418,50 @@ tbody tr:hover td:first-child {
   .metric-grid-8 { grid-template-columns: 1fr; }
   .add-form      { grid-template-columns: 1fr; }
 }
+
+/* ── Position grouping (ticker rollup + lot drilldown) ───────────────────── */
+.pos-group-row { cursor: pointer; }
+.pos-group-row.static { cursor: default; }
+
+.pos-disclosure {
+  display: inline-block;
+  font-size: 8px;
+  color: var(--t3);
+  transition: transform 0.15s ease, color 0.15s;
+}
+.pos-group-row:hover .pos-disclosure { color: var(--cyan); }
+.pos-group-row.open .pos-disclosure { transform: rotate(90deg); color: var(--cyan); }
+
+.lot-badge {
+  margin-left: 7px;
+  padding: 1px 5px;
+  border: 1px solid var(--bdr-mid);
+  border-radius: 3px;
+  font-family: var(--sans);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--t3);
+  vertical-align: 1px;
+}
+.pos-group-row.open .lot-badge { border-color: var(--bdr-cyan); color: var(--cyan); }
+
+/* Lot rows sit under their rollup: recessed ground, cyan spine down the left.
+   The background lives on the td because the tr-level hover gradient would
+   otherwise paint over it. */
+.pos-lot-row td {
+  background: rgba(0, 0, 0, 0.22);
+  padding-top: 7px;
+  padding-bottom: 7px;
+  font-size: 12px;
+}
+.pos-lot-row td:first-child { border-left: 2px solid var(--bdr-cyan); }
+.pos-lot-row:hover td { background: rgba(0, 200, 225, 0.05); }
+
+.lot-marker {
+  color: var(--t3);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}

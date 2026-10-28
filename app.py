@@ -1002,6 +1002,9 @@ def closes_for(symbols, start, adjusted=False, as_traded=False):
 
     A symbol is re-fetched when the cache starts more than a week after `start`,
     or when adjusted closes are wanted and the cached rows predate that column.
+    Otherwise, once per _MARKET_TTL, the days since its last cached close are
+    fetched first — forward-filling a stale tail would value holdings at prices
+    weeks out of date.
 
     `as_traded` undoes Yahoo's retroactive split adjustment, putting prices back
     in the share terms the trades were recorded in. Use it for valuing holdings;
@@ -1023,26 +1026,40 @@ def closes_for(symbols, start, adjusted=False, as_traded=False):
         gap = (_dt.strptime(min(days), '%Y-%m-%d') - _dt.strptime(start, '%Y-%m-%d')).days
         return gap <= 7
 
-    stale = [s for s in symbols if not covered(s)]
-    if stale:
-        period1 = int(_dt.strptime(start, '%Y-%m-%d').replace(tzinfo=_tz.utc).timestamp())
+    # (symbol, fetch-from date, replaces the cache rather than extending it)
+    pulls = [(s, start, True) for s in symbols if not covered(s)]
+    with _market_lock:
+        now = _time.monotonic()
+        pulls += [(s, max(cached[s]), False) for s in symbols
+                  if covered(s) and now - _market_refreshed.get(s, float('-inf')) > _MARKET_TTL]
+
+    if pulls:
         period2 = int(_dt.now(_tz.utc).timestamp())
 
-        def pull(sym):
+        def pull(job):
+            sym, from_date, _ = job
             try:
+                period1 = int(_dt.strptime(from_date, '%Y-%m-%d').replace(tzinfo=_tz.utc).timestamp())
                 fetched, splits = _yahoo_closes(sym, period1, period2)
                 _store_closes(sym, fetched)
                 _store_splits(sym, splits)
-                return sym, {d: ((v[1] if v[1] is not None else v[0]) if adjusted else v[0])
-                             for d, v in fetched.items()}
+                with _market_lock:
+                    _market_refreshed[sym] = _time.monotonic()
+                return {d: ((v[1] if v[1] is not None else v[0]) if adjusted else v[0])
+                        for d, v in fetched.items()}
             except Exception:
-                # keep whatever was cached; a missing symbol degrades one holding,
-                # it should not fail the whole series
-                return sym, {d: v for d, v in cached.get(sym, {}).items() if v is not None}
+                return None
 
         with ThreadPoolExecutor(max_workers=8) as pool:
-            for sym, days in pool.map(pull, stale):
-                cached[sym] = days
+            for (sym, _, full), days in zip(pulls, pool.map(pull, pulls)):
+                if days is None:
+                    # keep whatever was cached; a missing symbol degrades one holding,
+                    # it should not fail the whole series
+                    cached[sym] = {d: v for d, v in cached[sym].items() if v is not None}
+                elif full:
+                    cached[sym] = days
+                else:
+                    cached[sym].update(days)
 
     if as_traded:
         _backfill_splits(symbols, start)

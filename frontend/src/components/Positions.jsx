@@ -6,6 +6,11 @@ import { fmtDollar, fmtPct } from '../utils/format'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+const SHARE_EPS = 1e-8
+const r8 = n => Math.round(n * 1e8) / 1e8
+
+const groupKey = p => `${p.symbol}|${p.account ?? 'ira'}`
+
 function todayStr() {
   return new Date().toISOString().slice(0, 10)
 }
@@ -26,6 +31,39 @@ function enrichPosition(p, prices) {
     ? Math.pow(price / buy_per_sh, 365 / days) - 1
     : null
   return { ...p, buy_per_sh, days, price, mkt_value, unr_pl, unr_pct, cagr }
+}
+
+// Roll one ticker's lots into a single blended row.
+//
+// Days held is weighted by cost basis rather than averaged flat, which keeps the
+// group's CAGR consistent with the per-lot formula: a lot's CAGR is
+// (mkt / cost) ^ (365 / days) - 1, and the group applies that same shape to the
+// summed totals. A flat average would let a tiny recent lot drag the annualized
+// figure as hard as a large old one.
+function aggregateGroup(key, lots) {
+  const shares    = r8(lots.reduce((s, p) => s + p.shares, 0))
+  const total_buy = r2(lots.reduce((s, p) => s + p.total_buy, 0))
+  const price     = lots[0].price
+  const mkt_value = price != null ? r2(lots.reduce((s, p) => s + p.mkt_value, 0)) : null
+  const unr_pl    = mkt_value != null ? r2(mkt_value - total_buy) : null
+  const unr_pct   = unr_pl != null && total_buy > 0 ? unr_pl / total_buy : null
+  const days      = total_buy > 0
+    ? Math.round(lots.reduce((s, p) => s + p.total_buy * p.days, 0) / total_buy)
+    : 0
+  const cagr = mkt_value != null && total_buy > 0 && days >= MIN_DAYS_TO_ANNUALIZE
+    ? Math.pow(mkt_value / total_buy, 365 / days) - 1
+    : null
+
+  return {
+    key,
+    lots,
+    symbol:     lots[0].symbol,
+    account:    lots[0].account ?? 'ira',
+    // lots arrive oldest-first, so the first one is when this holding started
+    open_date:  lots[0].open_date,
+    shares, total_buy, price, mkt_value, unr_pl, unr_pct, days, cagr,
+    buy_per_sh: r2(total_buy / shares),
+  }
 }
 
 // ── Add Position Form ─────────────────────────────────────────────────────────
@@ -202,9 +240,6 @@ function CloseFormRow({ position, colSpan, onClose, onCancel }) {
 
 // ── Sell (multi-lot) inline form ─────────────────────────────────────────────
 
-const SHARE_EPS = 1e-8
-const r8 = n => Math.round(n * 1e8) / 1e8
-
 // Mirrors _allocate_lots() in app.py so the preview matches what the server will
 // actually write. Lots come in oldest-first; LIFO just walks them backwards.
 function allocateLots(lots, sellShares, totalSell, method) {
@@ -359,6 +394,35 @@ function SummaryBar({ positions }) {
   )
 }
 
+// ── Per-lot action buttons ───────────────────────────────────────────────────
+
+// Shared by the drilldown lot rows and by a single-lot group row, where the
+// group row *is* the lot and so carries lot-level actions itself.
+function LotActions({ p, editingId, closingId, confirmDel,
+                      setEditingId, setClosingId, setConfirmDel, setSellingKey,
+                      handleEdit, handleDelete }) {
+  if (editingId === p.id) return <button className="btn-del" onClick={() => setEditingId(null)}>Cancel</button>
+  if (closingId === p.id) return <button className="btn-del" onClick={() => setClosingId(null)}>Cancel</button>
+  if (confirmDel === p.id) {
+    return (
+      <span style={{ display: 'inline-flex', gap: 4 }}>
+        <button className="btn-del btn-del-armed" onClick={() => handleDelete(p.id)}>CONFIRM</button>
+        <button className="btn-del" onClick={() => setConfirmDel(null)}>✕</button>
+      </span>
+    )
+  }
+  return (
+    <span style={{ display: 'inline-flex', gap: 5 }}>
+      <button className="btn-del btn-edit" onClick={() => handleEdit(p.id)}>Edit</button>
+      <button className="btn-del" style={{ color: '#00c8e1' }}
+        onClick={() => { setClosingId(p.id); setEditingId(null); setConfirmDel(null); setSellingKey(null) }}>
+        Close
+      </button>
+      <button className="btn-del" onClick={() => handleDelete(p.id)}>✕</button>
+    </span>
+  )
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 const COLS = 13   // number of visible columns before the action column
@@ -369,22 +433,28 @@ export default function Positions({ positions, prices, pricesLoading, onRefreshP
   const [editingId,       setEditingId]       = useState(null)
   const [confirmDel,      setConfirmDel]      = useState(null)
   const [sellingKey,      setSellingKey]      = useState(null)
+  const [expanded,        setExpanded]        = useState(() => new Set())
 
   const enriched = positions.map(p => enrichPosition(p, prices))
 
   // Group lots by symbol *and* account: in the combined "all" view the same
-  // symbol can sit in both accounts, and FIFO matching across them would be wrong.
-  const groupKey = p => `${p.symbol}|${p.account ?? 'ira'}`
-  const symbolGroups = {}
+  // symbol can sit in both accounts, and rolling those into one row (or FIFO
+  // matching across them) would be wrong.
+  const symbolGroups = new Map()
   enriched.forEach(p => {
     const k = groupKey(p)
-    if (!symbolGroups[k]) symbolGroups[k] = []
-    symbolGroups[k].push(p)
+    if (!symbolGroups.has(k)) symbolGroups.set(k, [])
+    symbolGroups.get(k).push(p)
   })
-  const multiKeys = new Set(Object.keys(symbolGroups).filter(k => symbolGroups[k].length > 1))
-  const lastOfMultiGroup = new Set(
-    Object.values(symbolGroups).filter(g => g.length > 1).map(g => g[g.length - 1].id)
-  )
+  // Map preserves insertion order, so groups stay in the API's open_date order
+  // and each group's lots stay oldest-first.
+  const groups = [...symbolGroups].map(([k, lots]) => aggregateGroup(k, lots))
+
+  const toggle = key => setExpanded(prev => {
+    const next = new Set(prev)
+    next.has(key) ? next.delete(key) : next.add(key)
+    return next
+  })
 
   const handleClose = async (id, data) => {
     const err = await onClose(id, data)
@@ -419,7 +489,10 @@ export default function Positions({ positions, prices, pricesLoading, onRefreshP
       <div className="trades-panel-header">
         <div className="trades-title">
           Positions
-          <span className="trades-count">({positions.length} open)</span>
+          <span className="trades-count">
+            ({groups.length} ticker{groups.length === 1 ? '' : 's'}
+            {groups.length !== positions.length && <> · {positions.length} lots</>})
+          </span>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <button className="btn btn-ghost" onClick={onRefreshPrices} disabled={pricesLoading} style={{ fontSize: 11 }}>
@@ -470,82 +543,121 @@ export default function Positions({ positions, prices, pricesLoading, onRefreshP
                 <td colSpan={COLS + 1}>No open positions. Click "+ Add Position" to track a holding.</td>
               </tr>
             )}
-            {enriched.map(p => {
-              const plCls   = p.unr_pl == null ? '' : p.unr_pl >= 0 ? 'cell-gain' : 'cell-loss'
-              const key     = groupKey(p)
-              const dimmed  = editingId === p.id || closingId === p.id || sellingKey === key
-              const isMulti = multiKeys.has(key)
+            {groups.map(g => {
+              const isMulti  = g.lots.length > 1
+              const open     = isMulti && expanded.has(g.key)
+              const lot      = g.lots[0]              // for single-lot groups the row *is* the lot
+              const gPlCls   = g.unr_pl == null ? '' : g.unr_pl >= 0 ? 'cell-gain' : 'cell-loss'
+              const selling  = sellingKey === g.key
+              const busy     = !isMulti && (editingId === lot.id || closingId === lot.id)
+              const rowCls   = ['pos-group-row', isMulti ? '' : 'static', open ? 'open' : ''].join(' ').trim()
+
               return (
-                <React.Fragment key={p.id}>
-                  <tr style={{ opacity: dimmed ? 0.4 : 1 }}>
-                    <td className="cell-r">{p.id}</td>
-                    <td className="cell-sym">{p.symbol}</td>
-                    <td className="cell-date">{p.open_date}</td>
-                    <td className="cell-r">{p.shares}</td>
-                    <td className="cell-r">{fmtDollar(p.total_buy)}</td>
-                    <td className="cell-r">{fmtDollar(p.buy_per_sh)}</td>
-                    <td className="cell-r" style={{ color: p.price != null ? '#00c8e1' : '#3d5068' }}>
-                      {p.price != null ? fmtDollar(p.price) : '—'}
+                <React.Fragment key={g.key}>
+                  <tr
+                    className={rowCls}
+                    style={{ opacity: selling || busy ? 0.4 : 1 }}
+                    onClick={e => { if (isMulti && !e.target.closest('.btn-del')) toggle(g.key) }}
+                  >
+                    <td className="cell-r">
+                      {isMulti ? <span className="pos-disclosure">▶</span> : lot.id}
                     </td>
-                    <td className="cell-r">{p.mkt_value != null ? fmtDollar(p.mkt_value) : '—'}</td>
-                    <td className={`cell-r ${plCls}`}>{p.unr_pl != null ? fmtDollar(p.unr_pl) : '—'}</td>
-                    <td className={`cell-r ${plCls}`}>{p.unr_pct != null ? fmtPct(p.unr_pct) : '—'}</td>
-                    <td className="cell-r cell-muted">{p.days}</td>
-                    <td className="cell-r cell-muted">{p.cagr != null ? fmtPct(p.cagr, 1) : '—'}</td>
+                    <td className="cell-sym">
+                      {g.symbol}
+                      {isMulti && <span className="lot-badge">{g.lots.length} LOTS</span>}
+                    </td>
+                    <td className="cell-date">{g.open_date}</td>
+                    <td className="cell-r">{g.shares}</td>
+                    <td className="cell-r">{fmtDollar(g.total_buy)}</td>
+                    <td className="cell-r">{fmtDollar(g.buy_per_sh)}</td>
+                    <td className="cell-r" style={{ color: g.price != null ? '#00c8e1' : '#3d5068' }}>
+                      {g.price != null ? fmtDollar(g.price) : '—'}
+                    </td>
+                    <td className="cell-r">{g.mkt_value != null ? fmtDollar(g.mkt_value) : '—'}</td>
+                    <td className={`cell-r ${gPlCls}`}>{g.unr_pl != null ? fmtDollar(g.unr_pl) : '—'}</td>
+                    <td className={`cell-r ${gPlCls}`}>{g.unr_pct != null ? fmtPct(g.unr_pct) : '—'}</td>
+                    <td className="cell-r cell-muted">{g.days}</td>
+                    <td className="cell-r cell-muted">{g.cagr != null ? fmtPct(g.cagr, 1) : '—'}</td>
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                      {editingId === p.id ? (
-                        <button className="btn-del" onClick={() => setEditingId(null)}>Cancel</button>
-                      ) : closingId === p.id ? (
-                        <button className="btn-del" onClick={() => setClosingId(null)}>Cancel</button>
-                      ) : sellingKey === key ? (
+                      {selling ? (
                         <button className="btn-del" onClick={() => setSellingKey(null)}>Cancel</button>
-                      ) : confirmDel === p.id ? (
-                        <span style={{ display: 'inline-flex', gap: 4 }}>
-                          <button className="btn-del btn-del-armed" onClick={() => handleDelete(p.id)}>CONFIRM</button>
-                          <button className="btn-del" onClick={() => setConfirmDel(null)}>✕</button>
-                        </span>
+                      ) : isMulti ? (
+                        <button className="btn-del" style={{ color: '#00c8e1' }}
+                          onClick={() => { setSellingKey(g.key); setClosingId(null); setEditingId(null); setConfirmDel(null) }}>
+                          Sell
+                        </button>
                       ) : (
-                        <span style={{ display: 'inline-flex', gap: 5 }}>
-                          <button className="btn-del btn-edit" onClick={() => handleEdit(p.id)}>Edit</button>
-                          <button className="btn-del" style={{ color: '#00c8e1' }}
-                            onClick={() => { setClosingId(p.id); setEditingId(null); setConfirmDel(null); setSellingKey(null) }}>
-                            Close
-                          </button>
-                          {isMulti && (
-                            <button className="btn-del" style={{ color: '#00c8e1' }}
-                              onClick={() => { setSellingKey(key); setClosingId(null); setEditingId(null); setConfirmDel(null) }}>
-                              Sell
-                            </button>
-                          )}
-                          <button className="btn-del" onClick={() => handleDelete(p.id)}>✕</button>
-                        </span>
+                        <LotActions
+                          p={lot}
+                          editingId={editingId} closingId={closingId} confirmDel={confirmDel}
+                          setEditingId={setEditingId} setClosingId={setClosingId}
+                          setConfirmDel={setConfirmDel} setSellingKey={setSellingKey}
+                          handleEdit={handleEdit} handleDelete={handleDelete}
+                        />
                       )}
                     </td>
                   </tr>
-                  {editingId === p.id && (
-                    <EditPositionRow
-                      position={p}
-                      colSpan={COLS + 1}
-                      onSave={handleSave}
-                      onCancel={() => setEditingId(null)}
-                    />
-                  )}
-                  {closingId === p.id && (
-                    <CloseFormRow
-                      position={p}
-                      colSpan={COLS + 1}
-                      onClose={handleClose}
-                      onCancel={() => setClosingId(null)}
-                    />
-                  )}
-                  {lastOfMultiGroup.has(p.id) && sellingKey === key && (
+
+                  {/* Selling the whole ticker: the form spans every lot in the group */}
+                  {selling && (
                     <SellFormRow
-                      positions={symbolGroups[key]}
+                      positions={g.lots}
                       colSpan={COLS + 1}
                       onSell={handleSell}
                       onCancel={() => setSellingKey(null)}
                     />
                   )}
+
+                  {/* Single-lot group: the group row is the lot, so its forms hang off it directly */}
+                  {!isMulti && editingId === lot.id && (
+                    <EditPositionRow position={lot} colSpan={COLS + 1}
+                      onSave={handleSave} onCancel={() => setEditingId(null)} />
+                  )}
+                  {!isMulti && closingId === lot.id && (
+                    <CloseFormRow position={lot} colSpan={COLS + 1}
+                      onClose={handleClose} onCancel={() => setClosingId(null)} />
+                  )}
+
+                  {/* Drilldown: the individual lots behind the rollup */}
+                  {open && g.lots.map(p => {
+                    const plCls  = p.unr_pl == null ? '' : p.unr_pl >= 0 ? 'cell-gain' : 'cell-loss'
+                    const dimmed = editingId === p.id || closingId === p.id
+                    return (
+                      <React.Fragment key={p.id}>
+                        <tr className="pos-lot-row" style={{ opacity: dimmed ? 0.4 : 1 }}>
+                          <td className="cell-r cell-muted">{p.id}</td>
+                          <td className="lot-marker">└ lot</td>
+                          <td className="cell-date">{p.open_date}</td>
+                          <td className="cell-r">{p.shares}</td>
+                          <td className="cell-r">{fmtDollar(p.total_buy)}</td>
+                          <td className="cell-r">{fmtDollar(p.buy_per_sh)}</td>
+                          <td className="cell-r cell-muted">{p.price != null ? fmtDollar(p.price) : '—'}</td>
+                          <td className="cell-r">{p.mkt_value != null ? fmtDollar(p.mkt_value) : '—'}</td>
+                          <td className={`cell-r ${plCls}`}>{p.unr_pl != null ? fmtDollar(p.unr_pl) : '—'}</td>
+                          <td className={`cell-r ${plCls}`}>{p.unr_pct != null ? fmtPct(p.unr_pct) : '—'}</td>
+                          <td className="cell-r cell-muted">{p.days}</td>
+                          <td className="cell-r cell-muted">{p.cagr != null ? fmtPct(p.cagr, 1) : '—'}</td>
+                          <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                            <LotActions
+                              p={p}
+                              editingId={editingId} closingId={closingId} confirmDel={confirmDel}
+                              setEditingId={setEditingId} setClosingId={setClosingId}
+                              setConfirmDel={setConfirmDel} setSellingKey={setSellingKey}
+                              handleEdit={handleEdit} handleDelete={handleDelete}
+                            />
+                          </td>
+                        </tr>
+                        {editingId === p.id && (
+                          <EditPositionRow position={p} colSpan={COLS + 1}
+                            onSave={handleSave} onCancel={() => setEditingId(null)} />
+                        )}
+                        {closingId === p.id && (
+                          <CloseFormRow position={p} colSpan={COLS + 1}
+                            onClose={handleClose} onCancel={() => setClosingId(null)} />
+                        )}
+                      </React.Fragment>
+                    )
+                  })}
                 </React.Fragment>
               )
             })}
